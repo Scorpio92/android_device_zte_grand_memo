@@ -1,0 +1,1327 @@
+From fe2f61ccd3bf1538c07fa650edc5a9295e2d6289 Mon Sep 17 00:00:00 2001
+From: Naiem Shaik <snaiem@codeaurora.org>
+Date: Thu, 25 Apr 2013 18:24:03 -0700
+Subject: [PATCH] VeNum optimizations to libpng to improve PNG decode time
+
+Set correct counter in neon routine for SUB filter type.
+Enable Neon optimizations for all filter types and pixel depths.
+cherry picked from commit b912f64bc4bb174fc055cda58e303faaa640b8b1
+
+Change-Id: I296bfd2046f18f93b54a71cf86aef19a7fab2de1
+---
+ Android.mk                                 |    7 +
+ README                                     |    2 +
+ README-VeNum                               |   18 +
+ contrib/pngneon/png_read_filter_row_neon.s | 1170 ++++++++++++++++++++++++++++
+ pngrutil.c                                 |   20 +-
+ 5 files changed, 1207 insertions(+), 10 deletions(-)
+ create mode 100644 README-VeNum
+ create mode 100644 contrib/pngneon/png_read_filter_row_neon.s
+
+diff --git a/Android.mk b/Android.mk
+index 598a87a..769449f 100644
+--- a/Android.mk
++++ b/Android.mk
+@@ -74,6 +74,11 @@ include $(BUILD_STATIC_LIBRARY)
+ # For the device (shared)
+ # =====================================================
+ 
++ifeq ($(ARCH_ARM_HAVE_NEON),true)
++   common_SRC_FILES += contrib/pngneon/png_read_filter_row_neon.s
++   common_CFLAGS += -D__ARM_HAVE_NEON
++endif
++
+ include $(CLEAR_VARS)
+ LOCAL_CLANG := true
+ LOCAL_SRC_FILES := $(common_SRC_FILES)
+@@ -88,6 +93,8 @@ LOCAL_MODULE:= libpng
+ LOCAL_COPY_HEADERS_TO := $(common_COPY_HEADERS_TO)
+ LOCAL_COPY_HEADERS := $(common_COPY_HEADERS)
+ 
++LOCAL_PRELINK_MODULE := false
++
+ include $(BUILD_SHARED_LIBRARY)
+ 
+ # For testing
+diff --git a/README b/README
+index cbff544..92462dc 100644
+--- a/README
++++ b/README
+@@ -141,6 +141,7 @@ Files in this distribution:
+       KNOWNBUG      =>  List of known bugs and deficiencies
+       LICENSE       =>  License to use and redistribute libpng
+       README        =>  This file
++      README-VeNum  =>  Describes VeNum optimizations
+       TODO          =>  Things not implemented in the current library
+       Y2KINFO       =>  Statement of Y2K compliance
+       example.c     =>  Example code for using libpng functions
+@@ -177,6 +178,7 @@ Files in this distribution:
+        msvctest     =>  Builds and runs pngtest using a MSVC workspace
+        pngminim     =>  Simple pnm2pngm and png2pnmm programs
+        pngminus     =>  Simple pnm2png and png2pnm programs
++       pngneon      =>  VeNum optimizations to improve decode times
+        pngsuite     =>  Test images
+        visupng      =>  Contains a MSVC workspace for VisualPng
+       projects      =>  Contains project files and workspaces for
+diff --git a/README-VeNum b/README-VeNum
+new file mode 100644
+index 0000000..d3ded09
+--- /dev/null
++++ b/README-VeNum
+@@ -0,0 +1,18 @@
++=================================================================
++
++Websites across the world are increasing their use of the Portable Network
++Graphics imaging format, as a powerful and cross-platform way to represent
++images. With key features such as alpha blending, it is no surprise that many
++websites in countries such as China and India also use larger high-resolution
++PNG images on their sites. Increasingly these images are decoded by the mobile
++device, and typically also scaled down to fit the user's zoom selection on the
++device's browser.
++
++In order to improve the decode time, the PNG library found on many common
++OS platforms such as Web OS, Android, and Chrome OS.
++Our team re-implemented the png_read_filter_row() routine to utilize
++the DSP-like SIMD capabilities of the ARM NEON instruction set. It was then
++tuned for the specific VeNum hardware unit found as part of the CPU subsystem
++of the Snapdragon platform.
++
++This resulted in a range of 0-50% improvement in PNG decode times.
+diff --git a/contrib/pngneon/png_read_filter_row_neon.s b/contrib/pngneon/png_read_filter_row_neon.s
+new file mode 100644
+index 0000000..8a7f507
+--- /dev/null
++++ b/contrib/pngneon/png_read_filter_row_neon.s
+@@ -0,0 +1,1170 @@
++#; Copyright (c) 2010-2013, The Linux Foundation. All rights reserved.
++#;
++#; Redistribution and use in source and binary forms, with or without
++#; modification, are permitted provided that the following conditions are
++#; met:
++#;     * Redistributions of source code must retain the above copyright
++#;       notice, this list of conditions and the following disclaimer.
++#;     * Redistributions in binary form must reproduce the above
++#;       copyright notice, this list of conditions and the following
++#;       disclaimer in the documentation and/or other materials provided
++#;       with the distribution.
++#;     * Neither the name of The Linux Foundation. nor the names of its
++#;       contributors may be used to endorse or promote products derived
++#;       from this software without specific prior written permission.
++#;
++#; THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
++#; WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
++#; MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
++#; ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
++#; BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++#; CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++#; SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
++#; BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++#; WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
++#; OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
++#; IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++#;==============================================================================
++
++        .code 32                                          @; Code is ARM ISA
++#;==============================================================================
++
++        .global     png_read_filter_row_neon
++
++#;==============================================================================
++#;       INPUTS:    r0       rowbytes:     number of bytes in current row
++#;                  r1       pixel_depth:  number of bits per pixel
++#;                  r2       row:          pointer to start of current row
++#;                  r3       prev_row:     pointer to start of previous row
++#;                  [sp,#0]  filter:       filter type
++#;
++#;       NOTE:      Don't touch r5-r11
++#;==============================================================================
++.balign 32
++.type png_read_filter_row_neon, %function
++png_read_filter_row_neon:
++
++        ldr        r12,[sp,#0]
++
++        cmp        r12,#0
++        beq        DONE
++
++        cmp        r12,#1
++        beq        sub_filter
++
++        cmp        r12,#2
++        beq        up_filter
++
++        cmp        r12,#3
++        beq        avg_filter
++
++        cmp        r12,#4
++        beq        paeth_filter
++
++        b          DONE
++
++        #;; ---------------
++        #;; SUB filter type
++        #;; ---------------
++
++
++sub_filter:
++
++       stmdb  sp!, {r4}
++
++        add        r1,r1,#7                @; bpp = bytes per pixel
++        lsr        r1,r1,#3                @;     = (pixel_depth + 7) >> 3
++        mov        r12,r1
++
++        #;; r0 = rowbytes
++        #;; r1 = loop counter = bpp (initially)
++        #;; r2 = row pointer
++        #;; r12 = bpp = loop/pointer increment value
++
++        cmp        r1,r0
++        beq        sub_filter_exit         @; exit if bpp == rowbytes
++
++        cmp        r12,#1
++        beq        sub_filter_1bpp
++
++        cmp        r12,#2
++        beq        sub_filter_2bpp
++
++        cmp        r12,#3
++        beq        sub_filter_3bpp
++
++        cmp        r12,#4
++        beq        sub_filter_4bpp
++
++        cmp        r12,#6
++        beq        sub_filter_6bpp
++
++        cmp        r12,#8
++        beq        sub_filter_8bpp
++
++sub_filter_exit:
++        b          sub_filter_DONE             @; return
++
++
++sub_filter_1bpp:
++
++        #;; ----------------------------
++        #;; SUB filter, 1 byte per pixel
++        #;; ----------------------------
++
++      lsrs       r4,r0,#4                      @; r1 = floor(rowbytes/4)
++                                               @;    = iteration count for loop16
++      beq        sub_filter_1bpp_16bytes_done
++
++      vmov.i8    d21, #0
++      vld1.8     {d16,d17}, [r2]               @; load 16 pixels
++                                               @; d16 = a b c d e f g h
++                                               @; d17 = i j k l m n o p
++
++      mov       r1, #0
++sub_filter_1bpp_16bytes:
++
++
++
++
++       vshl.i64   d18, d16, #8                 @; d18 = 0 a b c d e f g
++       vadd.i8   d18, d16, d18                 @; d18 = a a+b b+c c+d d+e e+f f+g g+h
++
++       vshl.i64   d18, d18, #8                 @; d18 = 0 a a+b b+c c+d d+e e+f f+g
++       vadd.i8   d18, d16, d18                 @; d18 = a a+b a+b+c b+c+d c+d+e d+e+f e+f+g f+g+h
++
++       vshl.i64   d18, d18, #8                 @; shift add continuously to propage the sum of previous
++       vadd.i8   d18, d16, d18                 @; and current pixels
++
++       vshl.i64   d18, d18, #8
++       vadd.i8   d18, d16, d18
++
++       vshl.i64   d18, d18, #8
++       vadd.i8   d18, d16, d18
++
++       vshl.i64   d18, d18, #8
++       vadd.i8   d18, d16, d18
++
++       vshl.i64   d18, d18, #8
++       vadd.i8   d18, d16, d18                 @; maximum data size for shift is 64 bits i.e. doubleword.
++                                               @; after computing thh value of all the pixels in the double word
++                                               @; extract the last computed value which will be used by
++                                               @; the next set of pixels (i.e next doubleword)
++       vext.8     d22, d18, d21, #7            @; extract the updated value of d18[7] i.e a+b+c+d+e+f+h
++       vadd.i8    d17, d17, d22                @; d17 = a+b+c+d+e+f+g+h+i j k l m n o p
++
++       vshl.i64   d19, d17, #8                 @; continue shift-add as the first half
++       vadd.i8    d19, d17, d19
++
++       vshl.i64   d19, d19, #8
++       vadd.i8    d19, d17, d19
++
++       vshl.i64   d19, d19, #8
++       vadd.i8    d19, d17, d19
++
++       vshl.i64   d19, d19, #8
++       vadd.i8    d19, d17, d19
++
++       vshl.i64   d19, d19, #8
++       vadd.i8    d19, d17, d19
++
++       vshl.i64   d19, d19, #8
++       vadd.i8    d19, d17, d19
++
++       vshl.i64   d19, d19, #8
++       vadd.i8    d19, d17, d19
++
++       vst1.8     {d18,d19},[r2]!               @; store the result back
++
++       add        r1, r1, #16                   @; add 16 to the loop counter(no of bytes completed)
++       subs       r4,r4,#1                      @; decrement iteration count
++       beq        sub_filter_1bpp_16bytes_adjust
++
++
++       vext.8     d22, d19, d21, #7             @; more iterations to go
++                                                @; extract the last computed value
++       vld1.8     {d16,d17}, [r2]               @; load the next 16 bytes
++       vadd.i8    d16, d16, d22                 @; set up the input by adding the previous pixel
++                                                @; value to the input
++       b sub_filter_1bpp_16bytes
++
++sub_filter_1bpp_16bytes_adjust:
++
++       cmp        r1, r0                        @; no more pixels left .. exit
++       sub        r2, r2, #1                    @; more pixels remaining
++                                                @; r2 points to the current pixel adjust it
++                                                @; so that it points to the prev pixel for the below loop
++       beq        sub_filter_DONE
++
++sub_filter_1bpp_16bytes_done:
++
++
++       vld1.8     {d0[0]},[r2]!                 @; load 1 byte (1 pixel) into D0[0]
++                                                @; increment row pointer
++sub_filter_1bpp_loop:
++       add        r1,r1,r12                     @; loop counter += bpp
++       cmp        r1,r0                         @;
++
++       vld1.8     {d2[0]},[r2]                  @; load 1 byte (current pixel) into D2[0]
++
++       vadd.i8    d0,d0,d2                      @; vector add 1 byte of previous pixel with
++                                                @;            1 byte of current pixel
++       vst1.8     {d0[0]},[r2]!                 @; store 1 byte (updated pixel) back
++                                                @;  into row pointer location and increment
++                                                @;  row pointer
++
++       bne        sub_filter_1bpp_loop          @; loop back until loop counter == rowbytes
++
++       b          sub_filter_DONE               @; return
++
++       #;; -----------------------------
++       #;; SUB filter, 2 bytes per pixel
++       #;; -----------------------------
++sub_filter_2bpp:
++
++       lsrs       r4,r0,#4                      @; r1 = floor(rowbytes/4)
++                                                @;    = iteration count for loop16
++       beq        sub_filter_2bpp_16bytes_done
++
++       vmov.i8    d21, #0
++       vld1.8     {d16,d17}, [r2]               @; load 16 bytes to q8
++                                                @; d16 = a b c d e f g h
++                                                @; d17 = i j k l m n o p
++       mov       r1, #0
++sub_filter_2bpp_16bytes:
++
++       vshl.i64   d18, d16, #16                 @;  each pixel is 2bytes .. shift by 16 bits to get previous pixel
++       vadd.i8   d18, d16, d18                  @;  add to the current pixel
++
++       vshl.i64   d18, d18, #16                 @; shift-add to propagate the computed sum as the case for 1bpp
++       vadd.i8   d18, d16, d18
++
++       vshl.i64   d18, d18, #16
++       vadd.i8   d18, d16, d18
++
++
++       vext.8     d22, d18, d21, #6             @; extract the last computed value (i.e. last 2 bytes)
++       vadd.i8    d17, d17, d22                 @; add the last computed pixel to the input
++
++       vshl.i64   d19, d17, #16
++       vadd.i8    d19, d17, d19
++
++       vshl.i64   d19, d19, #16
++       vadd.i8    d19, d17, d19
++
++       vshl.i64   d19, d19, #16
++       vadd.i8    d19, d17, d19
++
++
++       vst1.8     {d18,d19},[r2]!               @; store the result back
++
++
++       add        r1, r1, #16                   @; add 16 to the loop counter(no of bytes completed)
++       subs       r4,r4,#1                      @; decrement iteration count
++       beq        sub_filter_2bpp_16bytes_adjust
++
++
++       vext.8     d22, d19, d21, #6             @; extract the last computed value
++                                                @; add the last computed pixel to the input
++       vld1.8     {d16,d17}, [r2]
++       vadd.i8    d16, d16, d22
++
++       b sub_filter_2bpp_16bytes
++
++
++sub_filter_2bpp_16bytes_adjust:
++
++       cmp        r1, r0                        @; no more pixels left .. exit
++       sub        r2, r2, #2                    @; more pixels remaining
++                                                @; r2 points to the current pixel adjust it
++                                                @; so that it points to the prev pixel for the below loop
++       beq        sub_filter_DONE
++
++sub_filter_2bpp_16bytes_done:
++
++       vld1.16    {d0[0]},[r2]!                 @; load 2 bytes (1 pixel) into D0[0]
++                                                @; increment row pointer
++sub_filter_2bpp_loop:
++       add        r1,r1,r12                     @; loop counter += bpp
++       cmp        r1,r0                         @;
++
++       vld1.16    {d2[0]},[r2]                  @; load 2 bytes (current pixel) into D2[0]
++       vadd.i8    d0,d0,d2                      @; vector add 2 bytes of previous pixel with
++                                                @;            2 bytes of current pixel
++       vst1.16    {d0[0]},[r2]!                 @; store 2 bytes (updated pixel) back
++                                                @;  into row pointer location and increment
++                                                @;  row pointer
++
++       bne        sub_filter_2bpp_loop          @; loop back until loop counter == rowbytes
++                                                @
++       b          sub_filter_DONE               @ ; return
++
++       #;; -----------------------------
++       #;; SUB filter, 3 bytes per pixel
++       #;; -----------------------------
++sub_filter_3bpp:
++       vld1.32    {d0[0]},[r2], r12             @; load 4 bytes (1 pixel + 1 extra byte) into D0[0]
++                                                @; increment row pointer by bpp
++sub_filter_3bpp_loop:
++       add        r1,r1,r12                     @; loop counter += bpp
++       cmp        r1,r0                         @;
++
++       vld1.32    {d2[0]},[r2]                  @; load 4 bytes (current pixel + 1 extra byte) into D2[0]
++       vadd.i8    d0,d0,d2                      @; vector add 3 bytes of previous pixel with
++                                                @;            3 bytes of current pixel
++       vst1.16    {d0[0]},[r2]!                 @; store 2 bytes (updated pixel) back
++                                                @;  into row pointer location and increment
++                                                @;  row pointer
++       vst1.8     {d0[2]},[r2]!                 @; store 1 byte (updated pixel) back
++                                                @;  into row pointer location and increment
++                                                @;  row pointer
++
++       bne        sub_filter_3bpp_loop          @; loop back until loop counter == rowbytes
++
++       b          sub_filter_DONE               @; return
++
++       #;; -----------------------------
++       #;; SUB filter, 4 bytes per pixel
++       #;; -----------------------------
++sub_filter_4bpp:
++       vld1.32    {d0[0]},[r2]!                 @; load 4 bytes (1 pixel) into D0[0]
++                                                @; increment row pointer
++sub_filter_4bpp_loop:                           @
++       add        r1,r1,r12                     @; loop counter += bpp
++       cmp        r1,r0                         @;
++
++
++       vld1.32    {d2[0]},[r2]                  @; load 4 bytes (current pixel) into D2[0]
++       vadd.i8    d0,d0,d2                      @; vector add 4 bytes of previous pixel with
++                                                @;            4 bytes of current pixel
++       vst1.32    {d0[0]},[r2]!                 @; store 4 bytes (updated pixel) back
++                                                @;  into row pointer location and increment
++                                                @;  row pointer
++
++       bne        sub_filter_4bpp_loop          @; loop back until loop counter == rowbytes
++
++       b          sub_filter_DONE               @; return
++
++       #;; -----------------------------
++       #;; SUB filter, 6 bytes per pixel
++       #;; -----------------------------
++sub_filter_6bpp:
++       vld1.8     {d0},[r2],r12                @; load 8 bytes (1 pixel + 2 extra bytes) into D0
++                                               @; increment row pointer by bpp
++sub_filter_6bpp_loop:                          @
++       add        r1,r1,r12                   @; loop counter += bpp
++       cmp        r1,r0                        @;
++
++       vld1.8     {d2},[r2]                    @; load 8 bytes (1 pixel + 2 extra bytes) into D2
++       vadd.i8    d0,d0,d2                     @; vector add 6 bytes of previous pixel with
++                                               @;            6 bytes of current pixel
++       vst1.32    {d0[0]},[r2]!                @; store 4 bytes (updated pixel) back
++                                               @;  into row pointer location and increment
++                                               @;  row pointer
++       vst1.16    {d0[2]},[r2]!                @; store 2 bytes (updated pixel) back
++                                               @;  into row pointer location and increment
++                                               @;  row pointer
++
++       bne        sub_filter_6bpp_loop         @; loop back until loop counter == rowbytes
++
++       b          sub_filter_DONE              @; return
++
++       #;; -----------------------------
++       #;; SUB filter, 8 bytes per pixel
++       #;; -----------------------------
++sub_filter_8bpp:
++       vld1.8     {d0},[r2]!                   @; load 8 bytes (1 pixel) into D0
++                                               @; increment row pointer
++sub_filter_8bpp_loop:                          @
++       add        r1,r1,r12                    @; loop counter += bpp
++       cmp        r1,r0                        @;
++       vld1.8     {d2},[r2]                    @; load 8 bytes (current pixel) into D2
++       vadd.i8    d0,d0,d2                     @; vector add 8 bytes of previous pixel with
++                                               @;            8 bytes of current pixel
++       vst1.8     {d0},[r2]!                   @; store 8 bytes (updated pixel) back
++                                               @;  into row pointer location and increment
++                                               @;  row pointer
++
++
++       bne        sub_filter_8bpp_loop         @; loop back until loop counter == rowbytes
++                                               @
++       b          sub_filter_DONE              @ ; return
++
++sub_filter_DONE:
++
++       ldmia       sp!, {r4}
++       bx         r14
++
++       #;; --------------
++       #;; UP filter type
++       #;; --------------
++up_filter:
++
++       #;; r0 = rowbytes
++       #;; r1 = pixel_depth (not required for UP filter type)
++       #;; r2 = row pointer
++       #;; r3 = previous row pointer
++
++
++       lsrs       r1,r0,#5                     @; r1 = floor(rowbytes/32)
++                                               @;    = iteration count for loop32
++       beq        up_filter_32bytes_proc_done
++
++
++up_filter_32bytes_proc:
++
++
++       mov        r12, r2
++
++       vld1.8     {q0},[r3]!                   @; load 32 bytes from previous
++       vld1.8     {q2},[r3]!                   @;  row and increment pointer
++                                               @
++                                               @
++       vld1.8     {q1},[r12]!                  @; load 32 bytes from current row
++       vld1.8     {q3},[r12]!                  @
++                                               @
++                                               @
++                                               @
++       vadd.i8    q0,q0,q1                     @; vector add of 16 bytes
++       vadd.i8    q2,q2,q3                     @
++                                               @
++                                               @
++                                               @
++       vst1.8     {q0},[r2]!                   @; store 32 bytes to current row
++       vst1.8     {q2},[r2]!                   @
++                                               @;  and increment pointer
++       sub        r0,r0,#32                    @; subtract 32 from rowbytes
++       subs       r1,r1,#1                     @; decrement iteration count
++       bne        up_filter_32bytes_proc
++
++
++
++up_filter_32bytes_proc_done:
++
++       lsrs       r1,r0,#4                     @; r1 = floor(rowbytes/16)
++                                               @;    = iteration count for loop16
++       beq        up_filter_16bytes_proc_done
++
++up_filter_16bytes_proc:
++
++       vld1.8     {q0},[r3]!                   @; load 16 bytes from previous
++                                               @;  row and increment pointer
++       vld1.8     {q1},[r2]                    @; load 16 bytes from current row
++       vadd.i8    q0,q0,q1                     @; vector add of 16 bytes
++       vst1.8     {q0},[r2]!                   @; store 16 bytes to current row
++                                               @;  and increment pointer
++       sub        r0,r0,#16                    @; subtract 16 from rowbytes
++       subs       r1,r1,#1                     @; decrement iteration count
++       bne        up_filter_16bytes_proc
++
++up_filter_16bytes_proc_done:
++
++       lsrs       r1,r0,#3                     @; r1 = floor(rowbytes/8)
++       beq        up_filter_8bytes_proc_done
++
++up_filter_8bytes_proc:
++
++       vld1.8     {d0},[r3]!                   @; load 8 bytes from previous
++                                               @;  row and increment pointer
++       vld1.8     {d2},[r2]                    @; load 8 bytes from current row
++       vadd.i8    d0,d0,d2                     @; vector add 8 bytes
++       vst1.8     {d0},[r2]!                   @; store 8 bytes to current row
++                                               @;  and increment pointer
++       sub        r0,r0,#8                     @; subtract 8 from rowbytes
++
++up_filter_8bytes_proc_done:
++
++       lsrs       r1,r0,#2                     @; r1 = floor(rowbytes/4)
++       beq        up_filter_4bytes_proc_done
++
++up_filter_4bytes_proc:
++
++       vld1.32    {d0[0]},[r3]!                @; load 4 bytes from previous row
++                                               @;  and increment pointer
++       vld1.32    {d2[0]},[r2]                 @; load 4 bytes from current row
++       vadd.i8    d0,d0,d2                     @; vector add 4 bytes
++       vst1.32    {d0[0]},[r2]!                @; store 4 bytes to current row
++                                               @;  and increment pointer
++       sub        r0,r0,#4                     @; subtract 4 from rowbytes
++
++up_filter_4bytes_proc_done:
++
++       lsrs       r1,r0,#1                     @; r1 = floor(rowbytes/2)
++       beq        up_filter_2bytes_proc_done
++
++up_filter_2bytes_proc:
++
++       vld1.16    {d0[0]},[r3]!                @; load 2 bytes from previous row
++                                               @;  and increment pointer
++       vld1.16    {d2[0]},[r2]                 @; load 2 bytes from current row
++       vadd.i8    d0,d0,d2                     @; vector add 2 bytes
++       vst1.16    {d0[0]},[r2]!                @; store 2 bytes to current row
++                                               @;  and increment pointer
++       sub        r0,r0,#2                     @; subtract 2 from rowbytes
++
++up_filter_2bytes_proc_done:
++
++       cmp        r0,#0
++       beq        up_filter_1byte_proc_done
++
++up_filter_1byte_proc:
++
++       vld1.8     {d0[0]},[r3]!                @; load 1 byte from previous row
++                                               @;  and increment pointer
++       vld1.8     {d2[0]},[r2]                 @; load 1 byte from current row
++       vadd.i8    d0,d0,d2                     @; vector add 1 byte
++       vst1.8     {d0[0]},[r2]!                @; store 1 byte to current row
++                                               @;  and increment pointer
++up_filter_1byte_proc_done:
++
++       b          DONE
++
++       #;; ---------------
++       #;; AVG filter type
++       #;; ---------------
++avg_filter:
++
++      add        r1,r1,#7                      @; bpp = byptes per pixel
++      lsr        r1,r1,#3                      @;     = (pixel_depth + 7) >> 3
++      mov        r12,r1
++
++      #;; r0 = rowbytes
++      #;; r1 = loop counter = bpp (initially)
++      #;; r2 = row pointer
++      #;; r3 = previous row pointer
++      #;; r12 = bpp = loop/pointer increment value
++
++      cmp        r12,#1
++      beq        avg_filter_1bpp
++
++      cmp        r12,#2
++      beq        avg_filter_2bpp
++
++      cmp        r12,#3
++      beq        avg_filter_3bpp
++
++      cmp        r12,#4
++      beq        avg_filter_4bpp
++
++      cmp        r12,#6
++      beq        avg_filter_6bpp
++
++      cmp        r12,#8
++      beq        avg_filter_8bpp
++
++avg_filter_exit:
++      b          DONE                           @; return
++
++      #;; ----------------------------
++      #;; AVG filter, 1 byte per pixel
++      #;; ----------------------------
++avg_filter_1bpp:
++
++      cmp        r1,r0
++
++      vld1.8     {d0[0]},[r2]                   @; load 1 byte (pixel x) from curr
++                                                @;  row into d0[0]
++      vld1.8     {d1[0]},[r3]!                  @; load 1 byte (pixel b) from prev
++                                                @;  row into d1[0]
++                                                @; increment prev row pointer
++      vsra.u8    d0,d1,#1                       @; shift right pixel b by 1 and add
++                                                @;  to pixel x
++      vst1.8     {d0[0]},[r2]!                  @; store 1 byte (updated pixel x)
++                                                @; increment curr row pointer
++                                                @; updated pixel x is now pixel a
++      beq        DONE
++
++avg_filter_1bpp_loop:
++      add        r1,r1,r12                      @; loop counter += bpp
++      cmp        r1,r0
++
++
++      vld1.8     {d2[0]},[r2]                   @; load 1 byte (pixel x) from curr
++                                                @;  row into d2[0]
++      vld1.8     {d1[0]},[r3]!                  @; load 1 byte (pixel b) from prev
++                                                @;  row into d1[0]
++      vaddl.u8   q2,d0,d1                       @; q2 = (pixel a + pixel b)
++      vshrn.i16  d1,q2,#1                       @; d1[0] = (a + b)/2
++      vadd.i8    d0,d2,d1                       @; d0[0] = x + ((a + b)/2)
++      vst1.8     {d0[0]},[r2]!                  @; store 1 byte (updated pixel x)
++                                                @; increment curr row pointer
++      bne        avg_filter_1bpp_loop
++
++      b          DONE                           @; exit loop when
++                                                @;  loop counter  == rowbytes
++      #;; -----------------------------
++      #;; AVG filter, 2 bytes per pixel
++      #;; -----------------------------
++avg_filter_2bpp:
++
++      cmp        r1,r0
++
++      vld1.16    {d0[0]},[r2]                   @; load 2 bytes (pixel x) from curr
++                                                @;  row into d0[0]
++      vld1.16    {d1[0]},[r3]!                  @; load 2 bytes (pixel b) from prev
++                                                @;  row into d1[0]
++                                                @; increment prev row pointer
++      vsra.u8    d0,d1,#1                       @; shift right pixel b by 1 and add
++                                                @;  to pixel x
++      vst1.16    {d0[0]},[r2]!                  @; store 2 bytes (updated pixel x)
++                                                @; increment curr row pointer
++                                                @; updated pixel x is now pixel a
++       beq        DONE
++
++avg_filter_2bpp_loop:
++      add        r1,r1,r12                      @; loop counter += bpp
++      cmp        r1,r0
++
++
++      vld1.16    {d2[0]},[r2]                   @; load 2 bytes (pixel x) from curr
++                                                @;  row into d2[0]
++      vld1.16    {d1[0]},[r3]!                  @; load 2 bytes (pixel b) from prev
++                                                @;  row into d1[0]
++      vaddl.u8   q2,d0,d1                       @; q2 = (pixel a + pixel b)
++      vshrn.i16  d1,q2,#1                       @; d1[0] = (a + b)/2
++      vadd.i8    d0,d2,d1                       @; d0[0] = x + ((a + b)/2)
++      vst1.16    {d0[0]},[r2]!                  @; store 2 bytes (updated pixel x)
++                                                @; increment curr row pointer
++
++      bne        avg_filter_2bpp_loop
++
++      b          DONE                           @; exit loop when
++                                                @;  loop counter  == rowbytes
++
++      #;; -----------------------------
++      #;; AVG filter, 3 bytes per pixel
++      #;; -----------------------------
++avg_filter_3bpp:
++
++      cmp        r1,r0
++
++      vld1.32    {d0[0]},[r2]                   @; load 4 bytes (pixel x + 1 extra
++                                                @;  byte) from curr row into d0[0]
++      vld1.32    {d1[0]},[r3],r12               @; load 4 bytes (pixel b + 1 extra
++                                                @;  byte) from prev row into d1[0]
++                                                @; increment prev row pointer
++      vsra.u8    d0,d1,#1                       @; shift right pixel b by 1 and add
++                                                @;  to pixel x
++      vst1.16    {d0[0]},[r2]!                  @; store 2 bytes (updated pixel x)
++                                                @; increment curr row pointer
++      vst1.8     {d0[2]},[r2]!                  @; store 1 byte (updated pixel x)
++                                                @; increment curr row pointer
++                                                @; updated pixel x is now pixel a
++      beq       DONE
++
++avg_filter_3bpp_loop:
++      add        r1,r1,r12                      @; loop counter += bpp
++      cmp        r1,r0
++
++      vld1.32    {d2[0]},[r2]                   @; load 4 bytes (pixel x + 1 extra
++                                                @;  byte) from curr row into d2[0]
++      vld1.32    {d1[0]},[r3],r12               @; load 4 bytes (pixel b + 1 extra
++                                                @;  byte) from prev row into d1[0]
++      vaddl.u8   q2,d0,d1                       @; q2 = (pixel a + pixel b)
++      vshrn.i16  d1,q2,#1                       @; d1[0] = (a + b)/2
++      vadd.i8    d0,d2,d1                       @; d0[0] = x + ((a + b)/2)
++      vst1.16    {d0[0]},[r2]!                  @; store 2 bytes (updated pixel x)
++                                                @; increment curr row pointer
++      vst1.8     {d0[2]},[r2]!                  @; store 1 byte (updated pixel x)
++                                                @; increment curr row pointer
++
++      bne        avg_filter_3bpp_loop
++
++      b          DONE                           @; exit loop when
++                                                @;  loop counter  == rowbytes
++      #;; -----------------------------
++      #;; AVG filter, 4 bytes per pixel
++      #;; -----------------------------
++avg_filter_4bpp:
++
++      cmp        r1,r0
++
++      vld1.32    {d0[0]},[r2]                   @; load 4 bytes (pixel x) from curr
++                                                @;  row into d0[0]
++      vld1.32    {d1[0]},[r3]!                  @; load 4 bytes (pixel b) from prev
++                                                @;  row into d1[0]
++                                                @; increment prev row pointer
++      vsra.u8    d0,d1,#1                       @; shift right pixel b by 1 and add
++                                                @;  to pixel x
++      vst1.32    {d0[0]},[r2]!                  @; store 4 bytes (updated pixel x)
++                                                @; increment curr row pointer
++                                                @; updated pixel x is now pixel a
++      beq        DONE
++
++avg_filter_4bpp_loop:
++      add        r1,r1,r12                      @; loop counter += bpp
++      cmp        r1,r0
++
++
++      vld1.32    {d2[0]},[r2]                   @; load 4 bytes (pixel x) from curr
++                                                @;  row into d2[0]
++      vld1.32    {d1[0]},[r3]!                  @; load 4 bytes (pixel b) from prev
++                                                @;  row into d1[0]
++      vaddl.u8   q2,d0,d1                       @; q2 = (pixel a + pixel b)
++      vshrn.i16  d1,q2,#1                       @; d1[0] = (a + b)/2
++      vadd.i8    d0,d2,d1                       @; d0[0] = x + ((a + b)/2)
++      vst1.32    {d0[0]},[r2]!                  @; store 4 bytes (updated pixel x)
++                                                @; increment curr row pointer
++      bne        avg_filter_4bpp_loop
++
++      b          DONE                           @; exit loop when
++                                                @;  loop counter  == rowbytes
++      #;; -----------------------------
++      #;; AVG filter, 6 bytes per pixel
++      #;; -----------------------------
++avg_filter_6bpp:
++
++      cmp        r1,r0
++
++      vld1.8     {d0},[r2]                      @; load 8 bytes (pixel x + 2 extra
++                                                @;  bytes) from curr row into d0
++      vld1.8     {d1},[r3],r12                  @; load 8 bytes (pixel b + 2 extra
++                                                @;  bytes) from prev row into d1
++                                                @; increment prev row pointer
++      vsra.u8    d0,d1,#1                       @; shift right pixel b by 1 and add
++                                                @;  to pixel x
++      vst1.32    {d0[0]},[r2]!                  @; store 4 bytes (updated pixel x)
++                                                @; increment curr row pointer
++                                                @; updated pixel x is now pixel a
++      vst1.16    {d0[2]},[r2]!                  @; store 2 bytes (updated pixel x)
++                                                @; increment curr row pointer
++                                                @; updated pixel x is now pixel a
++      beq        DONE
++
++avg_filter_6bpp_loop:
++      add        r1,r1,r12                      @; loop counter += bpp
++      cmp        r1,r0
++
++
++      vld1.8     {d2},[r2]                      @; load 8 bytes (pixel x + 2 extra
++                                                @;  bytes) from curr row into d2
++      vld1.8     {d1},[r3],r12                  @; load 8 bytes (pixel b + 2 extra
++                                                @;  bytes) from prev row into d1
++      vaddl.u8   q2,d0,d1                       @; q2 = (pixel a + pixel b)
++      vshrn.i16  d1,q2,#1                       @; d1 = (a + b)/2
++      vadd.i8    d0,d2,d1                       @; d0 = x + ((a + b)/2)
++      vst1.32    {d0[0]},[r2]!                  @; store 4 bytes (updated pixel x)
++                                                @; increment curr row pointer
++      vst1.16    {d0[2]},[r2]!                  @; store 2 bytes (updated pixel x)
++                                                @; increment curr row pointer
++      bne        avg_filter_6bpp_loop
++
++      b          DONE                           @; exit loop when
++                                                @;  loop counter  == rowbytes
++      #;; -----------------------------
++      #;; AVG filter, 8 bytes per pixel
++      #;; -----------------------------
++avg_filter_8bpp:
++
++      cmp        r1,r0
++
++      vld1.8     {d0},[r2]                      @; load 8 bytes (pixel x) from curr
++                                                @;  row into d0
++      vld1.8     {d1},[r3]!                     @; load 8 bytes (pixel b) from prev
++                                                @;  row into d1
++                                                @; increment prev row pointer
++      vsra.u8    d0,d1,#1                       @; shift right pixel b by 1 and add
++                                                @;  to pixel x
++      vst1.8     {d0},[r2]!                     @; store 8 bytes (updated pixel x)
++                                                @; increment curr row pointer
++                                                @; updated pixel x is now pixel a
++      beq        DONE
++avg_filter_8bpp_loop:
++      add        r1,r1,r12                      @; loop counter += bpp
++      cmp        r1,r0
++
++
++      vld1.8     {d2},[r2]                      @; load 8 bytes (pixel x) from curr
++                                                @;  row into d2
++      vld1.8     {d1},[r3]!                     @; load 8 bytes (pixel b) from prev
++                                                @;  row into d1
++      vaddl.u8   q2,d0,d1                       @; q2 = (pixel a + pixel b)
++      vshrn.i16  d1,q2,#1                       @; d1 = (a + b)/2
++      vadd.i8    d0,d2,d1                       @; d0 = x + ((a + b)/2)
++      vst1.8     {d0},[r2]!                     @; store 8 bytes (updated pixel x)
++                                                @; increment curr row pointer
++      bne        avg_filter_8bpp_loop
++
++      b          DONE                           @; exit loop when
++                                                @;  loop counter  == rowbytes
++      #;; -----------------
++      #;; PAETH filter type
++      #;; -----------------
++paeth_filter:
++
++      VPUSH     {q4-q7}
++      add        r1,r1,#7                       @; bpp = bytes per pixel
++      lsr        r1,r1,#3                       @;     = (pixel_depth + 7) >> 3
++      mov        r12,r1
++
++      #;; r0 = rowbytes
++      #;; r1 = loop counter = bpp (initially)
++      #;; r2 = row pointer
++      #;; r3 = previous row pointer
++      #;; r12 = bpp = loop/pointer increment value
++
++
++      cmp        r12,#1
++      beq        paeth_filter_1bpp
++
++      cmp        r12,#2
++      beq        paeth_filter_2bpp
++
++      cmp        r12,#3
++      beq        paeth_filter_3bpp
++
++      cmp        r12,#4
++      beq        paeth_filter_4bpp
++
++      cmp        r12,#6
++      beq        paeth_filter_6bpp
++
++      cmp        r12,#8
++      beq        paeth_filter_8bpp
++
++paeth_filter_exit:
++      b          paeth_filter_DONE              @; return
++
++      #;; ------------------------------
++      #;; PAETH filter, 1 byte per pixel
++      #;; ------------------------------
++paeth_filter_1bpp:
++
++      cmp        r1, r0
++
++      vld1.8     {d0[0]},[r2]                   @; load 1 byte (pixel x) from curr
++                                                @;  row into d0[0]
++      vld1.8     {d1[0]},[r3]!                  @; load 1 byte (pixel b) from prev
++                                                @;  row into d1[0]
++                                                @; increment prev row pointer
++      vadd.i8    d2,d0,d1                       @; d2 = x + b = updated pixel x
++      vst1.8     {d2[0]},[r2]!                  @; store 1 byte (updated pixel x)
++                                                @; increment curr row pointer
++
++      beq         paeth_filter_DONE
++
++paeth_filter_1bpp_loop:
++      add        r1,r1,r12                      @; increment curr row pointer
++      cmp        r1,r0
++
++
++      #;; d1[0] = c (b in the previous loop iteration)
++      #;; d2[0] = a (x in the previous loop iteration)
++      vld1.8     {d3[0]},[r3]!                  @; load 1 byte (pixel b) from prev
++                                                @;  row into d3[0]
++      vld1.8     {d0[0]},[r2]                   @; load 1 byte (pixel x) from curr
++                                                @;  row into d0[0]
++      vshll.u8   q4,d1,#1                       @; q4 = c<<1 = 2c
++      vabdl.u8   q3,d2,d1                       @; q3 = pb = abs(a - c)
++      vabdl.u8   q2,d3,d1                       @; q2 = pa = abs(b - c)
++      vaddl.u8   q5,d2,d3                       @; q5 = a + b
++      vabd.u16   q4,q5,q4                       @; q4 = pc = abs(a + b - 2c)
++
++      vcle.s16   q5,q2,q3                       @; q5 = (pa <= pb)
++      vcle.s16   q6,q2,q4                       @; q6 = (pa <= pc)
++      vand       q5,q5,q6                       @; q5 = ((pa <= pb) && (pa <= pc))
++      vcle.s16   q7,q3,q4                       @; q7 = (pb <= pc)
++      vshrn.u16  d10,q5,#8                      @; d10 = ((pa <= pb) && (pa <= pc))
++      vshrn.u16  d14,q7,#8                      @; d14 = (pb <= pc)
++                                                @
++      vand       d2,d2,d10                      @; d2 = a where 1, 0 where 0
++      vbsl       d14,d3,d1                      @; d14 = b where 1, c where 0
++      vmvn       d10,d10                        @; invert d10
++      vand       d14,d14,d10                    @; d14 = b/c where 1, 0 where 0
++      vadd.i8    d2,d2,d14                      @; d2 = p = a/b/c where appropriate
++      vadd.i8    d2,d2,d0                       @; d2 = x + p (updated pixel x)
++      vmov       d1,d3                          @; d1 = b (c for next iteration)
++      vst1.8     {d2[0]},[r2]!                  @; store 1 byte (updated pixel x)
++
++
++      bne        paeth_filter_1bpp_loop
++
++      b          paeth_filter_DONE              @; exit loop when
++                                                @;  loop counter == rowbytes
++      #;; -------------------------------
++      #;; PAETH filter, 2 bytes per pixel
++      #;; -------------------------------
++paeth_filter_2bpp:
++
++      cmp        r1, r0
++
++      vld1.16    {d0[0]},[r2]                   @; load 2 bytes (pixel x) from curr
++                                                @;  row into d0[0]
++      vld1.16    {d1[0]},[r3]!                  @; load 2 bytes (pixel b) from prev
++                                                @;  row into d1[0]
++                                                @; increment prev row pointer
++      vadd.i8    d2,d0,d1                       @; d2 = x + b = updated pixel x
++      vst1.16    {d2[0]},[r2]!                  @; store 2 bytes (updated pixel x)
++                                                @; increment curr row pointer
++      beq        paeth_filter_DONE
++
++paeth_filter_2bpp_loop:
++      add        r1,r1,r12                      @; loop counter += bpp
++      cmp        r1,r0
++
++      #;; d1[0] = c (b in the previous loop iteration)
++      #;; d2[0] = a (x in the previous loop iteration)
++      vld1.16    {d3[0]},[r3]!                  @; load 2 bytes (pixel b) from prev
++                                                @;  row into d3[0]
++      vld1.16    {d0[0]},[r2]                   @; load 2 bytes (pixel x) from curr
++                                                @;  row into d0[0]
++      vshll.u8   q4,d1,#1                       @; q4 = c<<1 = 2c
++      vabdl.u8   q3,d2,d1                       @; q3 = pb = abs(a - c)
++      vabdl.u8   q2,d3,d1                       @; q2 = pa = abs(b - c)
++      vaddl.u8   q5,d2,d3                       @; q5 = a + b
++      vabd.u16   q4,q5,q4                       @; q4 = pc = abs(a + b - 2c)
++
++      vcle.s16   q5,q2,q3                       @; q5 = (pa <= pb)
++      vcle.s16   q6,q2,q4                       @; q6 = (pa <= pc)
++      vand       q5,q5,q6                       @; q5 = ((pa <= pb) && (pa <= pc))
++      vcle.s16   q7,q3,q4                       @; q7 = (pb <= pc)
++      vshrn.u16  d10,q5,#8                      @; d10 = ((pa <= pb) && (pa <= pc))
++      vshrn.u16  d14,q7,#8                      @; d14 = (pb <= pc)
++
++      vand       d2,d2,d10                      @; d2 = a where 1, 0 where 0
++      vbsl       d14,d3,d1                      @; d14 = b where 1, c where 0
++      vmvn       d10,d10                        @; invert d10
++      vand       d14,d14,d10                    @; d14 = b/c where 1, 0 where 0
++      vadd.i8    d2,d2,d14                      @; d2 = p = a/b/c where appropriate
++      vadd.i8    d2,d2,d0                       @; d2 = x + p (updated pixel x)
++      vmov       d1,d3                          @; d1 = b (c for next iteration)
++      vst1.16    {d2[0]},[r2]!                  @; store 2 bytes (updated pixel x)
++                                                @; increment curr row pointer
++      bne        paeth_filter_2bpp_loop
++
++      b          paeth_filter_DONE              @; exit loop when
++                                                @;  loop counter == rowbytes
++      #;; -------------------------------
++      #;; PAETH filter, 3 bytes per pixel
++      #;; -------------------------------
++paeth_filter_3bpp:
++
++      cmp        r1, r0
++
++      vld1.32    {d0[0]},[r2]                   @; load 4 bytes (pixel x + 1 extra
++                                                @;  byte) from curr row into d0[0]
++      vld1.32     {d1[0]},[r3],r12              @; load 4 bytes (pixel b + 1 extra
++                                                @;  byte) from prev row into d1[0]
++                                                @; increment prev row pointer
++      vadd.i8    d2,d0,d1                       @; d2 = x + b = updated pixel x
++      vst1.16    {d2[0]},[r2]!                  @; store 2 bytes (updated pixel x)
++                                                @; increment curr row pointer
++      vst1.8     {d2[2]},[r2]!                  @; store 1 byte (updated pixel x)
++                                                @; increment curr row pointer
++      beq        paeth_filter_DONE
++
++paeth_filter_3bpp_loop:
++      add        r1,r1,r12                      @; loop counter += bpp
++      cmp        r1,r0
++
++
++      #;; d1[0] = c (b in the previous loop iteration)
++      #;; d2[0] = a (x in the previous loop iteration)
++      vld1.32    {d3[0]},[r3],r12               @; load 4 bytes (pixel b + 1 extra
++                                                @;  byte) from prev row into d3[0]
++      vld1.32    {d0[0]},[r2]                   @; load 4 bytes (pixel x + 1 extra
++                                                @;  byte) from curr row into d0[0]
++      vshll.u8   q4,d1,#1                       @; q4 = c<<1 = 2c
++      vabdl.u8   q3,d2,d1                       @; q3 = pb = abs(a - c)
++      vabdl.u8   q2,d3,d1                       @; q2 = pa = abs(b - c)
++      vaddl.u8   q5,d2,d3                       @; q5 = a + b
++      vabd.u16   q4,q5,q4                       @; q4 = pc = abs(a + b - 2c)
++                                                @
++      vcle.s16   q5,q2,q3                       @; q5 = (pa <= pb)
++      vcle.s16   q6,q2,q4                       @; q6 = (pa <= pc)
++      vand       q5,q5,q6                       @; q5 = ((pa <= pb) && (pa <= pc))
++      vcle.s16   q7,q3,q4                       @; q7 = (pb <= pc)
++      vshrn.u16  d10,q5,#8                      @; d10 = ((pa <= pb) && (pa <= pc))
++      vshrn.u16  d14,q7,#8                      @; d14 = (pb <= pc)
++                                                @
++      vand       d2,d2,d10                      @; d2 = a where 1, 0 where 0
++      vbsl       d14,d3,d1                      @; d14 = b where 1, c where 0
++      vmvn       d10,d10                        @; invert d10
++      vand       d14,d14,d10                    @; d14 = b/c where 1, 0 where 0
++      vadd.i8    d2,d2,d14                      @; d2 = p = a/b/c where appropriate
++      vadd.i8    d2,d2,d0                       @; d2 = x + p (updated pixel x)
++      vmov       d1,d3                          @; d1 = b (c for next iteration)
++      vst1.16    {d2[0]},[r2]!                  @; store 2 bytes (updated pixel x)
++                                                @; increment curr row pointer
++      vst1.8     {d2[2]},[r2]!                  @; store 1 byte (updated pixel x)
++                                                @; increment curr row pointer
++      bne        paeth_filter_3bpp_loop
++
++      b          paeth_filter_DONE              @; exit loop when
++                                                @;  loop counter == rowbytes
++      #;; -------------------------------
++      #;; PAETH filter, 4 bytes per pixel
++      #;; -------------------------------
++paeth_filter_4bpp:
++
++     cmp        r1, r0
++
++     vld1.32    {d0[0]},[r2]                    @; load 4 bytes (pixel x) from curr
++                                                @;  row into d0[0]
++     vld1.32    {d1[0]},[r3]!                   @; load 4 bytes (pixel b) from prev
++                                                @;  row into d1[0]
++                                                @; increment prev row pointer
++     vadd.i8    d2,d0,d1                        @; d2 = x + b = updated pixel x
++     vst1.32    {d2[0]},[r2]!                   @; store 4 bytes (updated pixel x)
++                                                @; increment curr row pointer
++     beq        paeth_filter_DONE
++
++paeth_filter_4bpp_loop:
++     add        r1,r1,r12                       @; loop counter += bpp
++     cmp        r1,r0
++
++
++     #;; d1[0] = c (b in the previous loop iteration)
++     #;; d2[0] = a (x in the previous loop iteration)
++     vld1.32    {d3[0]},[r3]!                   @; load 4 bytes (pixel b) from prev
++                                                @;  row into d3[0]
++     vld1.32    {d0[0]},[r2]                    @; load 4 bytes (pixel x) from curr
++                                                @;  row into d0[0]
++     vshll.u8   q4,d1,#1                        @; q4 = c<<1 = 2c
++     vabdl.u8   q3,d2,d1                        @; q3 = pb = abs(a - c)
++     vabdl.u8   q2,d3,d1                        @; q2 = pa = abs(b - c)
++     vaddl.u8   q5,d2,d3                        @; q5 = a + b
++     vabd.u16   q4,q5,q4                        @; q4 = pc = abs(a + b - 2c)
++                                                @
++     vcle.s16   q5,q2,q3                        @; q5 = (pa <= pb)
++     vcle.s16   q6,q2,q4                        @; q6 = (pa <= pc)
++     vand       q5,q5,q6                        @; q5 = ((pa <= pb) && (pa <= pc))
++     vcle.s16   q7,q3,q4                        @; q7 = (pb <= pc)
++     vshrn.u16  d10,q5,#8                       @; d10 = ((pa <= pb) && (pa <= pc))
++     vshrn.u16  d14,q7,#8                       @; d14 = (pb <= pc)
++                                                @
++     vand       d2,d2,d10                       @; d2 = a where 1, 0 where 0
++     vbsl       d14,d3,d1                       @; d14 = b where 1, c where 0
++     vmvn       d10,d10                         @; invert d10
++     vand       d14,d14,d10                     @; d14 = b/c where 1, 0 where 0
++     vadd.i8    d2,d2,d14                       @; d2 = p = a/b/c where appropriate
++     vadd.i8    d2,d2,d0                        @; d2 = x + p (updated pixel x)
++     vmov       d1,d3                           @; d1 = b (c for next iteration)
++     vst1.32    {d2[0]},[r2]!                   @; store 4 bytes (updated pixel x)
++                                                @; increment curr row pointer
++     bne        paeth_filter_4bpp_loop
++
++     b          paeth_filter_DONE              @; exit loop when
++                                               @;  loop counter == rowbytes
++     #;; -------------------------------
++     #;; PAETH filter, 6 bytes per pixel
++     #;; -------------------------------
++paeth_filter_6bpp:
++     cmp        r1, r0
++
++     vld1.8     {d0},[r2]                       @; load 8 bytes (pixel x + 2 extra
++                                                @;  bytes) from curr row into d0
++     vld1.8     {d1},[r3],r12                   @; load 8 bytes (pixel b + 2 extra
++                                                @;  bytes) from prev row into d1
++                                                @; increment prev row pointer
++     vadd.i8    d2,d0,d1                        @; d2 = x + b = updated pixel x
++     vst1.32    {d2[0]},[r2]!                   @; store 4 bytes (updated pixel x)
++                                                @; increment curr row pointer
++     vst1.16    {d2[2]},[r2]!                   @; store 2 bytes (updated pixel x)
++                                                @; increment curr row pointer
++     beq        paeth_filter_DONE
++
++paeth_filter_6bpp_loop:
++     add        r1,r1,r12                       @; loop counter += bpp
++     cmp        r1,r0
++
++
++     #;; d1[0] = c (b in the previous loop iteration)
++     #;; d2[0] = a (x in the previous loop iteration)
++     vld1.8     {d3},[r3],r12                   @; load 8 bytes (pixel b + 2 extra
++                                                @;  bytes) from prev row into d3
++     vld1.8     {d0},[r2]                       @; load 8 bytes (pixel x + 2 extra
++                                                @;  bytes) from curr row into d0
++     vshll.u8   q4,d1,#1                        @; q4 = c<<1 = 2c
++     vabdl.u8   q3,d2,d1                        @; q3 = pb = abs(a - c)
++     vabdl.u8   q2,d3,d1                        @; q2 = pa = abs(b - c)
++     vaddl.u8   q5,d2,d3                        @; q5 = a + b
++     vabd.u16   q4,q5,q4                        @; q4 = pc = abs(a + b - 2c)
++
++     vcle.s16   q5,q2,q3                        @; q5 = (pa <= pb)
++     vcle.s16   q6,q2,q4                        @; q6 = (pa <= pc)
++     vand       q5,q5,q6                        @; q5 = ((pa <= pb) && (pa <= pc))
++     vcle.s16   q7,q3,q4                        @; q7 = (pb <= pc)
++     vshrn.u16  d10,q5,#8                       @; d10 = ((pa <= pb) && (pa <= pc))
++     vshrn.u16  d14,q7,#8                       @; d14 = (pb <= pc)
++
++     vand       d2,d2,d10                       @; d2 = a where 1, 0 where 0
++     vbsl       d14,d3,d1                       @; d14 = b where 1, c where 0
++     vmvn       d10,d10                         @; invert d10
++     vand       d14,d14,d10                     @; d14 = b/c where 1, 0 where 0
++     vadd.i8    d2,d2,d14                       @; d2 = p = a/b/c where appropriate
++     vadd.i8    d2,d2,d0                        @; d2 = x + p (updated pixel x)
++     vmov       d1,d3                           @; d1 = b (c for next iteration)
++     vst1.32    {d2[0]},[r2]!                   @; store 4 bytes (updated pixel x)
++                                                @; increment curr row pointer
++     vst1.16    {d2[2]},[r2]!                   @; store 2 bytes (updated pixel x)
++                                                @; increment curr row pointer
++     bne        paeth_filter_6bpp_loop
++
++     b          paeth_filter_DONE              @; exit loop when
++                                               @;  loop counter == rowbytes
++     #;; -------------------------------
++     #;; PAETH filter, 8 bytes per pixel
++     #;; -------------------------------
++paeth_filter_8bpp:
++    cmp        r1, r0
++
++    vld1.8     {d0},[r2]                        @; load 8 bytes (pixel x) from curr
++                                                @;  row into d0
++    vld1.8     {d1},[r3]!                       @; load 8 bytes (pixel b) from prev
++                                                @;  row into d1
++                                                @; increment prev row pointer
++    vadd.i8    d2,d0,d1                         @; d2 = x + b = updated pixel x
++    vst1.8     {d2},[r2]!                       @; store 8 bytes (updated pixel x)
++                                                @; increment curr row pointer
++    beq        paeth_filter_DONE
++
++paeth_filter_8bpp_loop:
++    add        r1,r1,r12                        @; loop counter += bpp
++    cmp        r1,r0
++
++
++    #;; d1[0] = c (b in the previous loop iteration)
++    #;; d2[0] = a (x in the previous loop iteration)
++    vld1.8     {d3},[r3]!                       @; load 8 bytes (pixel b) from prev
++                                                @;  row into d3
++    vld1.8     {d0},[r2]                        @; load 8 bytes (pixel x) from curr
++                                                @;  row into d0
++    vshll.u8   q4,d1,#1                         @; q4 = c<<1 = 2c
++    vabdl.u8   q3,d2,d1                         @; q3 = pb = abs(a - c)
++    vabdl.u8   q2,d3,d1                         @; q2 = pa = abs(b - c)
++    vaddl.u8   q5,d2,d3                         @; q5 = a + b
++    vabd.u16   q4,q5,q4                         @; q4 = pc = abs(a + b - 2c)
++                                                @
++    vcle.s16   q5,q2,q3                         @; q5 = (pa <= pb)
++    vcle.s16   q6,q2,q4                         @; q6 = (pa <= pc)
++    vand       q5,q5,q6                         @; q5 = ((pa <= pb) && (pa <= pc))
++    vcle.s16   q7,q3,q4                         @; q7 = (pb <= pc)
++    vshrn.u16  d10,q5,#8                        @; d10 = ((pa <= pb) && (pa <= pc))
++    vshrn.u16  d14,q7,#8                        @; d14 = (pb <= pc)
++                                                @
++    vand       d2,d2,d10                        @; d2 = a where 1, 0 where 0
++    vbsl       d14,d3,d1                        @; d14 = b where 1, c where 0
++    vmvn       d10,d10                          @; invert d10
++    vand       d14,d14,d10                      @; d14 = b/c where 1, 0 where 0
++    vadd.i8    d2,d2,d14                        @; d2 = p = a/b/c where appropriate
++    vadd.i8    d2,d2,d0                         @; d2 = x + p (updated pixel x)
++    vmov       d1,d3                            @; d1 = b (c for next iteration)
++    vst1.8     {d2},[r2]!                       @; store 8 bytes (updated pixel x)
++                                                @; increment curr row pointer
++    bne        paeth_filter_8bpp_loop
++
++    b          paeth_filter_DONE                @; exit loop when
++                                                @;  loop counter == rowbytes
++paeth_filter_DONE:
++
++    VPOP       {q4-q7}
++    bx         r14
++
++DONE:
++     bx   r14
++
++
++.size png_read_filter_row_neon, .-png_read_filter_row_neon
++     .END
+diff --git a/pngrutil.c b/pngrutil.c
+index 31c9b01..37230e3 100644
+--- a/pngrutil.c
++++ b/pngrutil.c
+@@ -3,6 +3,7 @@
+  *
+  * Last changed in libpng 1.2.45 [July 7, 2011]
+  * Copyright (c) 1998-2011 Glenn Randers-Pehrson
++ * Copyright (c) 2010-2013, The Linux Foundation. All rights reserved.
+  * (Version 0.96 Copyright (c) 1996, 1997 Andreas Dilger)
+  * (Version 0.88 Copyright (c) 1995, 1996 Guy Eric Schalnat, Group 42, Inc.)
+  *
+@@ -23,6 +24,10 @@
+ #  define WIN32_WCE_OLD
+ #endif
+ 
++#if defined(__ARM_HAVE_NEON)
++extern void png_read_filter_row_neon(png_uint_32 rowbytes, png_byte pixel_depth, png_bytep row, png_bytep prev_row, int filter);
++#endif
++
+ #ifdef PNG_FLOATING_POINT_SUPPORTED
+ #  ifdef WIN32_WCE_OLD
+ /* The strtod() function is not supported on WindowsCE */
+@@ -2959,6 +2964,10 @@ png_read_filter_row(png_structp png_ptr, png_row_infop row_info, png_bytep row,
+ {
+    png_debug(1, "in png_read_filter_row");
+    png_debug2(2, "row = %lu, filter = %d", png_ptr->row_number, filter);
++
++#if defined(__ARM_HAVE_NEON)
++   png_read_filter_row_neon(row_info->rowbytes, row_info->pixel_depth, row, prev_row, filter);
++#else
+    switch (filter)
+    {
+       case PNG_FILTER_VALUE_NONE:
+@@ -3052,16 +3061,6 @@ png_read_filter_row(png_structp png_ptr, png_row_infop row_info, png_bytep row,
+             pb = pc < 0 ? -pc : pc;
+             pc = (p + pc) < 0 ? -(p + pc) : p + pc;
+ #endif
+-
+-            /*
+-               if (pa <= pb && pa <= pc)
+-                  p = a;
+-               else if (pb <= pc)
+-                  p = b;
+-               else
+-                  p = c;
+-             */
+-
+             p = (pa <= pb && pa <= pc) ? a : (pb <= pc) ? b : c;
+ 
+             *rp = (png_byte)(((int)(*rp) + p) & 0xff);
+@@ -3074,6 +3073,7 @@ png_read_filter_row(png_structp png_ptr, png_row_infop row_info, png_bytep row,
+          *row = 0;
+          break;
+    }
++#endif
+ }
+ 
+ #ifdef PNG_INDEX_SUPPORTED
+-- 
+1.7.9.5
+

@@ -1,0 +1,236 @@
+From 8a3d69efa6fff89f5e83fccbdb657fd530822f0f Mon Sep 17 00:00:00 2001
+From: Wei Wang <wangw@codeaurora.org>
+Date: Wed, 23 Jan 2013 15:17:39 -0800
+Subject: [PATCH 02/10] GC triggering performance optimizations
+
+Copy the correct starting heap size at process init.
+Interfaces to set GC/managed heap parameters.
+
+Change-Id: I454b1985a3225d7dbdea9c5d4e6f0c9f5e24352e
+(cherry picked from commit ea59f91c8559dee1710f38a27db10f76f4753fea)
+(cherry picked from commit 12fc949d46e988ce6877ad4c60f5fc983c5dc202)
+(cherry picked from commit 73a1dac0b14ab5159453c2d696049e233e7476b0)
+---
+ vm/alloc/Alloc.h                      |   20 ++++++++++
+ vm/alloc/HeapSource.cpp               |   71 +++++++++++++++++++++++++++++----
+ vm/native/dalvik_system_VMRuntime.cpp |   36 +++++++++++++++++
+ 3 files changed, 119 insertions(+), 8 deletions(-)
+
+diff --git a/vm/alloc/Alloc.h b/vm/alloc/Alloc.h
+index b838719..c9a23f9 100644
+--- a/vm/alloc/Alloc.h
++++ b/vm/alloc/Alloc.h
+@@ -117,6 +117,26 @@ float dvmGetTargetHeapUtilization(void);
+ void dvmSetTargetHeapUtilization(float newTarget);
+ 
+ /*
++ * Sets HEAP_MIN_FREE
++ */
++void dvmSetTargetHeapMinFree(size_t size);
++
++/*
++ * Gets HEAP_MIN_FREE
++ */
++int dvmGetTargetHeapMinFree();
++
++/*
++ * Sets CONCURRENT_START
++ */
++void dvmSetTargetHeapConcurrentStart(size_t size);
++
++/*
++ * Gets CONCURRENT_START
++ */
++int dvmGetTargetHeapConcurrentStart();
++
++/*
+  * Initiate garbage collection.
+  *
+  * This usually happens automatically, but can also be caused by
+diff --git a/vm/alloc/HeapSource.cpp b/vm/alloc/HeapSource.cpp
+index 82c2b9e..8f1c4cb 100644
+--- a/vm/alloc/HeapSource.cpp
++++ b/vm/alloc/HeapSource.cpp
+@@ -45,12 +45,14 @@ static void trimHeaps();
+ /* Start a concurrent collection when free memory falls under this
+  * many bytes.
+  */
+-#define CONCURRENT_START (128 << 10)
++#define CONCURRENT_START_DEFAULT (128 << 10)
++
++static unsigned int concurrentStart = CONCURRENT_START_DEFAULT;
+ 
+ /* The next GC will not be concurrent when free memory after a GC is
+  * under this many bytes.
+  */
+-#define CONCURRENT_MIN_FREE (CONCURRENT_START + (128 << 10))
++#define CONCURRENT_MIN_FREE (concurrentStart + (128 << 10))
+ 
+ #define HS_BOILERPLATE() \
+     do { \
+@@ -448,9 +450,9 @@ static bool addNewHeap(HeapSource *hs)
+                   overhead, hs->maximumSize);
+         return false;
+     }
+-    size_t morecoreStart = SYSTEM_PAGE_SIZE;
++    size_t morecoreStart = MAX(SYSTEM_PAGE_SIZE, gDvm.heapStartingSize);
+     heap.maximumSize = hs->growthLimit - overhead;
+-    heap.concurrentStartBytes = hs->minFree - CONCURRENT_START;
++    heap.concurrentStartBytes = hs->minFree - concurrentStart;
+     heap.base = base;
+     heap.limit = heap.base + heap.maximumSize;
+     heap.brk = heap.base + morecoreStart;
+@@ -658,8 +660,8 @@ GcHeap* dvmHeapSourceStartup(size_t startSize, size_t maximumSize,
+     if (hs->maxFree > hs->maximumSize) {
+       hs->maxFree = hs->maximumSize;
+     }
+-    if (hs->minFree < CONCURRENT_START) {
+-      hs->minFree = CONCURRENT_START;
++    if (hs->minFree < concurrentStart) {
++      hs->minFree = concurrentStart;
+     } else if (hs->minFree > hs->maxFree) {
+       hs->minFree = hs->maxFree;
+     }
+@@ -696,6 +698,13 @@ fail:
+ 
+ bool dvmHeapSourceStartupAfterZygote()
+ {
++    //For each new application forked, we need to reset softLimit and
++    //concurrentStartBytes to be the correct expected value, not the one
++    //inherit from Zygote
++    HeapSource* hs   = gHs;
++
++    hs->softLimit=SIZE_MAX;
++    hs->heaps[0].concurrentStartBytes = mspace_footprint(hs->heaps[0].msp) - concurrentStart;
+     return gDvm.concurrentMarkSweep ? gcDaemonStartup() : true;
+ }
+ 
+@@ -1308,8 +1317,9 @@ static void setIdealFootprint(size_t max)
+ static void snapIdealFootprint()
+ {
+     HS_BOILERPLATE();
++    HeapSource *hs = gHs;
+ 
+-    setIdealFootprint(getSoftFootprint(true));
++    setIdealFootprint(getSoftFootprint(true) + hs->minFree);
+ }
+ 
+ /*
+@@ -1351,6 +1361,48 @@ void dvmSetTargetHeapUtilization(float newTarget)
+ }
+ 
+ /*
++ * Sets TargetHeapMinFree
++ */
++void dvmSetTargetHeapMinFree(size_t size)
++{
++    HS_BOILERPLATE();
++    gHs->minFree = size;
++    LOGD_HEAP("dvmSetTargetHeapIdealFree %d", gHs->minFree );
++}
++
++/*
++ * Gets TargetHeapMinFree
++ */
++int dvmGetTargetHeapMinFree()
++{
++    HS_BOILERPLATE();
++    LOGD_HEAP("dvmGetTargetHeapIdealFree %d", gHs->minFree );
++    return gHs->minFree;
++}
++
++
++/*
++ * Sets concurrentStart
++ */
++void dvmSetTargetHeapConcurrentStart(size_t size)
++{
++    concurrentStart = size;
++    LOGD_HEAP("dvmSetTargetHeapConcurrentStart %d", size );
++}
++
++/*
++ * Gets concurrentStart
++ */
++int dvmGetTargetHeapConcurrentStart()
++{
++    HS_BOILERPLATE();
++    LOGD_HEAP("dvmGetTargetHeapConcurrentStart %d", concurrentStart );
++    return concurrentStart;
++}
++
++
++
++/*
+  * Given the size of a live set, returns the ideal heap size given
+  * the current target utilization and MIN/MAX values.
+  */
+@@ -1409,7 +1461,10 @@ void dvmHeapSourceGrowForUtilization()
+         /* Not enough free memory to allow a concurrent GC. */
+         heap->concurrentStartBytes = SIZE_MAX;
+     } else {
+-        heap->concurrentStartBytes = freeBytes - CONCURRENT_START;
++        //For small footprint, we keep the min percentage to start
++        //concurrent GC; for big footprint, we keep the absolute value
++        //of free to start concurrent GC
++        heap->concurrentStartBytes = freeBytes - MIN(freeBytes * (float)(0.2), concurrentStart);
+     }
+ 
+     /* Mark that we need to run finalizers and update the native watermarks
+diff --git a/vm/native/dalvik_system_VMRuntime.cpp b/vm/native/dalvik_system_VMRuntime.cpp
+index 4123426..69f9adb 100644
+--- a/vm/native/dalvik_system_VMRuntime.cpp
++++ b/vm/native/dalvik_system_VMRuntime.cpp
+@@ -60,6 +60,38 @@ static void Dalvik_dalvik_system_VMRuntime_nativeSetTargetHeapUtilization(
+ }
+ 
+ /*
++ * native void nativeSetTargetHeapMinFree()
++ *
++ * Sets the current MIN_FREE, represented as a number
++ * for byte size.  Returns the old MIN_FREE.
++ *
++ * Note that this is NOT static.
++ */
++static void Dalvik_dalvik_system_VMRuntime_nativeSetTargetHeapMinFree(
++    const u4* args, JValue* pResult)
++{
++    dvmSetTargetHeapMinFree(args[1]);
++
++    RETURN_INT(dvmGetTargetHeapMinFree());
++}
++
++/*
++ * native void nativeSetTargetHeapConcurrentStart()
++ *
++ * Sets the current concurrentStart, represented as a number
++ * for byte size.  Returns the old concurrentStart.
++ *
++ * Note that this is NOT static.
++ */
++static void Dalvik_dalvik_system_VMRuntime_nativeSetTargetHeapConcurrentStart(
++    const u4* args, JValue* pResult)
++{
++    dvmSetTargetHeapConcurrentStart(args[1]);
++
++    RETURN_INT(dvmGetTargetHeapConcurrentStart());
++}
++
++/*
+  * public native void startJitCompilation()
+  *
+  * Callback function from the framework to indicate that an app has gone
+@@ -564,6 +596,10 @@ const DalvikNativeMethod dvm_dalvik_system_VMRuntime[] = {
+         Dalvik_dalvik_system_VMRuntime_getTargetHeapUtilization },
+     { "nativeSetTargetHeapUtilization", "(F)V",
+         Dalvik_dalvik_system_VMRuntime_nativeSetTargetHeapUtilization },
++    { "nativeSetTargetHeapMinFree", "(I)I",
++        Dalvik_dalvik_system_VMRuntime_nativeSetTargetHeapMinFree },
++    { "nativeSetTargetHeapConcurrentStart", "(I)I",
++        Dalvik_dalvik_system_VMRuntime_nativeSetTargetHeapConcurrentStart },
+     { "newNonMovableArray", "(Ljava/lang/Class;I)Ljava/lang/Object;",
+         Dalvik_dalvik_system_VMRuntime_newNonMovableArray },
+     { "properties", "()[Ljava/lang/String;",
+-- 
+1.7.9.5
+

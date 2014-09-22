@@ -1,0 +1,44 @@
+From f1e5d94ccee94428e026da592870a963bd522551 Mon Sep 17 00:00:00 2001
+From: Brent DeGraaf <bdegraaf@codeaurora.org>
+Date: Thu, 3 Oct 2013 16:37:39 -0400
+Subject: [PATCH 13/14] libc: arm: Allow optional optimization of memmove and
+ bcopy
+
+The libc functions memmove and bcopy are not configurable target-by-
+target.  This change allows per-target optimization for best perfor-
+mance.
+
+Change-Id: Id684672fbf0bcffbe68c36a28b64186a6c2554f3
+---
+ libc/Android.mk                  |    2 --
+ libc/arch-arm/generic/generic.mk |    2 ++
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/libc/Android.mk b/libc/Android.mk
+index 9610c14..9fc94df 100644
+--- a/libc/Android.mk
++++ b/libc/Android.mk
+@@ -364,8 +364,6 @@ libc_upstream_netbsd_src_files := \
+ # =========================================================
+ ifeq ($(TARGET_ARCH),arm)
+ libc_common_src_files += \
+-	bionic/memmove.c.arm \
+-	string/bcopy.c \
+ 	string/strncmp.c \
+ 	string/strncat.c \
+ 	string/strncpy.c \
+diff --git a/libc/arch-arm/generic/generic.mk b/libc/arch-arm/generic/generic.mk
+index e230003..b9e650e 100644
+--- a/libc/arch-arm/generic/generic.mk
++++ b/libc/arch-arm/generic/generic.mk
+@@ -1,5 +1,7 @@
+ $(call libc-add-cpu-variant-src,MEMCPY,arch-arm/generic/bionic/memcpy.S)
+ $(call libc-add-cpu-variant-src,MEMSET,arch-arm/generic/bionic/memset.S)
++$(call libc-add-cpu-variant-src,MEMMOVE,bionic/memmove.c.arm)
++$(call libc-add-cpu-variant-src,BCOPY,string/bcopy.c.arm)
+ $(call libc-add-cpu-variant-src,STRCAT,string/strcat.c)
+ $(call libc-add-cpu-variant-src,STRCMP,arch-arm/generic/bionic/strcmp.S)
+ $(call libc-add-cpu-variant-src,STRCPY,arch-arm/generic/bionic/strcpy.S)
+-- 
+1.7.9.5
+

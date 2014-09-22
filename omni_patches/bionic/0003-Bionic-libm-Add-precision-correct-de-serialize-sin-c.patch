@@ -1,0 +1,76 @@
+From 9b60730da795af057edae1347989c147601abee5 Mon Sep 17 00:00:00 2001
+From: Lucas Crowthers <lucasc@codeaurora.org>
+Date: Wed, 7 Nov 2012 16:30:44 -0500
+Subject: [PATCH 03/14] Bionic/libm: Add precision-correct de-serialize
+ sin/cos.
+
+Modify sin/cos to improve performance while retaining bit-for-bit
+accuracy with existing algorithm.
+
+Change-Id: Iaba2dd731cd015732744705dad8bddb713b43067
+(cherry picked from commit df55e67573e176042c5d2ae084c758bc2e9e0025)
+(cherry picked from commit 6a688d7aa4512731c430673ccd4f0d6e3999d439)
+(cherry picked from commit 47bb7bc2962bff835000dca016f6319c20734398)
+---
+ libm/upstream-freebsd/lib/msun/src/k_cos.c |   12 ++++++++++++
+ libm/upstream-freebsd/lib/msun/src/k_sin.c |   11 +++++++++++
+ 2 files changed, 23 insertions(+)
+
+diff --git a/libm/upstream-freebsd/lib/msun/src/k_cos.c b/libm/upstream-freebsd/lib/msun/src/k_cos.c
+index c4702e6..a7eab7b 100644
+--- a/libm/upstream-freebsd/lib/msun/src/k_cos.c
++++ b/libm/upstream-freebsd/lib/msun/src/k_cos.c
+@@ -68,6 +68,17 @@ C6  = -1.13596475577881948265e-11; /* 0xBDA8FAE9, 0xBE8838D4 */
+ double
+ __kernel_cos(double x, double y)
+ {
++#if defined(KRAIT_NEON_OPTIMIZATION)
++	double hz,z,zz,r,w,k;
++
++	z  = x*x;
++	zz = z*z;
++	k = x*y;
++	hz = (float)0.5*z;
++	r  = z*(z*(C1+z*(C2+z*((C3+z*C4)+zz*(C5+z*C6)))));
++	w  = one-hz;
++	return w + (((one-w)-hz) + (r-k));
++#else
+ 	double hz,z,r,w;
+ 
+ 	z  = x*x;
+@@ -76,4 +87,5 @@ __kernel_cos(double x, double y)
+ 	hz = 0.5*z;
+ 	w  = one-hz;
+ 	return w + (((one-w)-hz) + (z*r-x*y));
++#endif
+ }
+diff --git a/libm/upstream-freebsd/lib/msun/src/k_sin.c b/libm/upstream-freebsd/lib/msun/src/k_sin.c
+index 12ee8c1..8506391 100644
+--- a/libm/upstream-freebsd/lib/msun/src/k_sin.c
++++ b/libm/upstream-freebsd/lib/msun/src/k_sin.c
+@@ -59,6 +59,16 @@ S6  =  1.58969099521155010221e-10; /* 0x3DE5D93A, 0x5ACFD57C */
+ double
+ __kernel_sin(double x, double y, int iy)
+ {
++#if defined(KRAIT_NEON_OPTIMIZATION)
++	double z,zz,r,v;
++
++	z	=  x*x;
++	zz  =  z*z;
++	v	=  z*x;
++	r	=  S2+z*((S3+z*S4)+zz*(S5+z*S6));
++	if(iy==0) return x+v*(S1+z*r);
++	else      return x-((z*(half*y-v*r)-y)-v*S1);
++#else
+ 	double z,r,v,w;
+ 
+ 	z	=  x*x;
+@@ -67,4 +77,5 @@ __kernel_sin(double x, double y, int iy)
+ 	v	=  z*x;
+ 	if(iy==0) return x+v*(S1+z*r);
+ 	else      return x-((z*(half*y-v*r)-y)-v*S1);
++#endif
+ }
+-- 
+1.7.9.5
+

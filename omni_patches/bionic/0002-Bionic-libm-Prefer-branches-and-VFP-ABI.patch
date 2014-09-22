@@ -1,0 +1,68 @@
+From 1573e692c52067bbcd67d554800c09e353f05093 Mon Sep 17 00:00:00 2001
+From: Lucas Crowthers <lucasc@codeaurora.org>
+Date: Mon, 27 Aug 2012 14:27:59 -0400
+Subject: [PATCH 02/14] Bionic/libm: Prefer branches and VFP ABI.
+
+For internal functions set gcc attribute "aapcs-vfp" for ARM
+and use -fno-if-conversion to prefer branches over predicated
+instructions (improves performance on architectures with good
+branch prediction).
+
+Change-Id: I8424e0e82a19d35e7e3b6e3e122dcdecdd5426fd
+(cherry picked from commit a8ed843c678e2a4019c0b88a7a11ff8e3bdb4f70)
+(cherry picked from commit 7cbe6a43c3152147f581cb1423bd14582619a2af)
+(cherry picked from commit 885827b36a52939f2434b19d458fc9c18680e54f)
+---
+ libm/Android.mk                                   |    6 ++++++
+ libm/upstream-freebsd/lib/msun/src/math_private.h |   11 +++++++++++
+ 2 files changed, 17 insertions(+)
+
+diff --git a/libm/Android.mk b/libm/Android.mk
+index b06bc24..5195fa3 100644
+--- a/libm/Android.mk
++++ b/libm/Android.mk
+@@ -179,6 +179,12 @@ libm_common_src_files += \
+ 
+ libm_common_src_files += fake_long_double.c
+ 
++  ifeq ($(TARGET_CPU_VARIANT),krait)
++    libm_common_src_files += \
++	  arm/e_pow.S
++    libm_common_cflags += -DKRAIT_NEON_OPTIMIZATION -fno-if-conversion
++  endif
++
+ # TODO: on Android, "long double" is "double".
+ #    upstream-freebsd/lib/msun/src/e_acosl.c \
+ #    upstream-freebsd/lib/msun/src/e_asinl.c \
+diff --git a/libm/upstream-freebsd/lib/msun/src/math_private.h b/libm/upstream-freebsd/lib/msun/src/math_private.h
+index 8ebc7fb..a28344e 100644
+--- a/libm/upstream-freebsd/lib/msun/src/math_private.h
++++ b/libm/upstream-freebsd/lib/msun/src/math_private.h
+@@ -723,6 +723,15 @@ irintl(long double x)
+ #define	__ieee754_remainderf remainderf
+ #define	__ieee754_scalbf scalbf
+ 
++#if defined(KRAIT_NEON_OPTIMIZATION)
++int	__kernel_rem_pio2(double*,double*,int,int,int) __attribute__((pcs("aapcs-vfp")));
++#ifndef INLINE_REM_PIO2
++int	__ieee754_rem_pio2(double,double*) __attribute__((pcs("aapcs-vfp")));
++#endif
++double	__kernel_sin(double,double,int) __attribute__((pcs("aapcs-vfp")));
++double	__kernel_cos(double,double) __attribute__((pcs("aapcs-vfp")));
++double	__kernel_tan(double,double,int) __attribute__((pcs("aapcs-vfp")));
++#else
+ /* fdlibm kernel function */
+ int	__kernel_rem_pio2(double*,double*,int,int,int);
+ 
+@@ -733,6 +742,8 @@ int	__ieee754_rem_pio2(double,double*);
+ double	__kernel_sin(double,double,int);
+ double	__kernel_cos(double,double);
+ double	__kernel_tan(double,double,int);
++#endif
++
+ double	__ldexp_exp(double,int);
+ #ifdef _COMPLEX_H
+ double complex __ldexp_cexp(double complex,int);
+-- 
+1.7.9.5
+

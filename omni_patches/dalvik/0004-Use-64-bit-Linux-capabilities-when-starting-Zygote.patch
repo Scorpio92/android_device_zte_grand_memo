@@ -1,0 +1,47 @@
+From 3101f064c379471020669b596b8f8f98fded3e76 Mon Sep 17 00:00:00 2001
+From: David Ng <dave@codeaurora.org>
+Date: Mon, 14 Oct 2013 15:23:05 -0700
+Subject: [PATCH 04/10] Use 64-bit Linux capabilities when starting Zygote
+
+Enable 64-bit capabilities when starting Zygote to allow
+>32-bit capabilties to be set, such as CAP_BLOCK_SUSPEND.
+
+Change-Id: I2821a2a393dc521c7b99a7283ba17b3ae3b375fd
+---
+ vm/native/dalvik_system_Zygote.cpp |   12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/vm/native/dalvik_system_Zygote.cpp b/vm/native/dalvik_system_Zygote.cpp
+index e2b618b..3dae6de 100644
+--- a/vm/native/dalvik_system_Zygote.cpp
++++ b/vm/native/dalvik_system_Zygote.cpp
+@@ -428,19 +428,21 @@ static int setCapabilities(int64_t permitted, int64_t effective)
+ {
+ #ifdef HAVE_ANDROID_OS
+     struct __user_cap_header_struct capheader;
+-    struct __user_cap_data_struct capdata;
++    struct __user_cap_data_struct capdata[_LINUX_CAPABILITY_U32S_3];
+ 
+     memset(&capheader, 0, sizeof(capheader));
+     memset(&capdata, 0, sizeof(capdata));
+ 
+-    capheader.version = _LINUX_CAPABILITY_VERSION;
++    capheader.version = _LINUX_CAPABILITY_VERSION_3;
+     capheader.pid = 0;
+ 
+-    capdata.effective = effective;
+-    capdata.permitted = permitted;
++    capdata[0].effective = effective & 0xffffffffULL;
++    capdata[0].permitted = permitted & 0xffffffffULL;
++    capdata[1].effective = (uint64_t)effective >> 32;
++    capdata[1].permitted = (uint64_t)permitted >> 32;
+ 
+     ALOGV("CAPSET perm=%llx eff=%llx", permitted, effective);
+-    if (capset(&capheader, &capdata) != 0)
++    if (capset(&capheader, capdata) != 0)
+         return errno;
+ #endif /*HAVE_ANDROID_OS*/
+ 
+-- 
+1.7.9.5
+

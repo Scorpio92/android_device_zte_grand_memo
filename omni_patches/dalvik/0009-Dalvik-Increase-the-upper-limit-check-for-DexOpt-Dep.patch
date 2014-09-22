@@ -1,0 +1,33 @@
+From a695ea564595fc5dcbf4fe207561158e24b4be42 Mon Sep 17 00:00:00 2001
+From: Abhishek Arpure <aarpure@codeaurora.org>
+Date: Fri, 6 Dec 2013 17:20:26 +0530
+Subject: [PATCH 09/10] Dalvik : Increase the upper limit check for DexOpt
+ Deps table
+
+Increasing upper limit check for the Deps table as additonal
+jars added causes the dalvik to crash while performing dexopt
+on cached jar files. This is needed for passing cts test case
+which is part of libcore.java.util.jar.DalvikExecTest class.
+
+Change-Id: I7e271ddf68d2b0d03081b03c395ac62d4e50ef0f
+CRs-Fixed: 573586
+---
+ vm/analysis/DexPrepare.cpp |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vm/analysis/DexPrepare.cpp b/vm/analysis/DexPrepare.cpp
+index b0147b3..707ac90 100644
+--- a/vm/analysis/DexPrepare.cpp
++++ b/vm/analysis/DexPrepare.cpp
+@@ -1153,7 +1153,7 @@ static const u1* getSignature(const ClassPathEntry* cpe)
+  * If this changes, update DEX_OPT_MAGIC_VERS.
+  */
+ static const size_t kMinDepSize = 4 * 4;
+-static const size_t kMaxDepSize = 4 * 4 + 2448;     // sanity check
++static const size_t kMaxDepSize = 4 * 4 + 2544;     // sanity check
+ 
+ /*
+  * Read the "opt" header, verify it, then read the dependencies section
+-- 
+1.7.9.5
+

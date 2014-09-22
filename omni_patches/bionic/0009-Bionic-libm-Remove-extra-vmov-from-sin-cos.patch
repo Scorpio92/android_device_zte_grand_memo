@@ -1,0 +1,50 @@
+From 0f8a900802d4b93f9b372d8f4c6e0cae8fcc0ab5 Mon Sep 17 00:00:00 2001
+From: Lucas Crowthers <lucasc@codeaurora.org>
+Date: Thu, 20 Jun 2013 23:46:26 +0530
+Subject: [PATCH 09/14] Bionic/libm: Remove extra vmov from sin/cos.
+
+Move integer representations of x bits on the integer side rather
+than moving them to and from the FP registers.
+
+Change-Id: I1895db385c9616cdae9ab6403f392dfbae292adc
+(cherry picked from commit 1d0c5a9fe67141515fa54403d985828590f9c206)
+(cherry picked from commit ca46b68c30cf470464ffac530b8bdba242cc5c17)
+(cherry picked from commit d7acb8827620ab7331995e843fd79015aed84996)
+---
+ libm/arm/s_cos.S |    3 ++-
+ libm/arm/s_sin.S |    3 ++-
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/libm/arm/s_cos.S b/libm/arm/s_cos.S
+index 42114b6..13ff2d5 100644
+--- a/libm/arm/s_cos.S
++++ b/libm/arm/s_cos.S
+@@ -53,8 +53,9 @@
+ ENTRY(cos)
+     push            {r4, r6, r7, lr}
+     vmov            d0, r0, r1
++    mov             r2, r0
++    mov             r3, r1
+     movw            r1, #0x21fb
+-    vmov            r2, r3, d0
+     movt            r1, #0x3fe9
+     mov             r4, r3
+     bic             r3, r3, #0x80000000
+diff --git a/libm/arm/s_sin.S b/libm/arm/s_sin.S
+index 58e696f..9aa6829 100644
+--- a/libm/arm/s_sin.S
++++ b/libm/arm/s_sin.S
+@@ -53,8 +53,9 @@
+ ENTRY(sin)
+     push            {r4, r6, r7, lr}
+     vmov            d0, r0, r1
++    mov             r2, r0
++    mov             r3, r1
+     movw            r1, #0x21fb
+-    vmov            r2, r3, d0
+     movt            r1, #0x3fe9
+     mov             r4, r3
+     bic             r3, r3, #0x80000000
+-- 
+1.7.9.5
+

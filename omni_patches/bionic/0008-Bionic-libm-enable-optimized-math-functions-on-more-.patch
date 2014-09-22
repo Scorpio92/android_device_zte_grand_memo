@@ -1,0 +1,50 @@
+From ee2d0d199249ffa906af3dcbb55f73bb41980c53 Mon Sep 17 00:00:00 2001
+From: Wei Wang <wangw@codeaurora.org>
+Date: Mon, 8 Apr 2013 13:46:54 -0700
+Subject: [PATCH 08/14] Bionic/libm: enable optimized math functions on more
+ QCOM targets.
+
+allow more QCOM targets to use optimized math functions.
+
+Change-Id: I76ee1bf951ae1c8397fef3af6e9937ed8cad9b62
+(cherry picked from commit a7b5a06b144c96324db2370bd63b83c81d41ddc3)
+(cherry picked from commit 8ccd613ff555349e0751659ebe03c182dae9a2eb)
+(cherry picked from commit ccd4b1db5b225b0b4913b80b014f1c2f99c6fdff)
+---
+ libm/Android.mk |   20 +++++++++++++++-----
+ 1 file changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/libm/Android.mk b/libm/Android.mk
+index c6fa6b7..6359b09 100644
+--- a/libm/Android.mk
++++ b/libm/Android.mk
+@@ -184,11 +184,21 @@ libm_common_src_files += fake_long_double.c
+ 	  arm/e_sqrt.S
+     libm_common_cflags += -DKRAIT_NEON_OPTIMIZATION -fno-if-conversion
+   else
+-    libm_common_src_files += \
+-	  upstream-freebsd/lib/msun/src/s_cos.c \
+-	  upstream-freebsd/lib/msun/src/s_sin.c \
+-	  upstream-freebsd/lib/msun/src/e_sqrtf.c \
+-	  upstream-freebsd/lib/msun/src/e_sqrt.c
++      ifeq ($(TARGET_USE_QCOM_BIONIC_OPTIMIZATION),true)
++        libm_common_src_files += \
++	      arm/e_pow.S \
++	      arm/s_cos.S \
++	      arm/s_sin.S \
++	      arm/e_sqrtf.S \
++	      arm/e_sqrt.S
++        libm_common_cflags += -DKRAIT_NEON_OPTIMIZATION -fno-if-conversion
++      else
++        libm_common_src_files += \
++	      upstream-freebsd/lib/msun/src/s_cos.c \
++	      upstream-freebsd/lib/msun/src/s_sin.c \
++	      upstream-freebsd/lib/msun/src/e_sqrtf.c \
++	      upstream-freebsd/lib/msun/src/e_sqrt.c
++      endif
+   endif
+ 
+ # TODO: on Android, "long double" is "double".
+-- 
+1.7.9.5
+

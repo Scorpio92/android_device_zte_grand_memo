@@ -1,0 +1,33 @@
+From ddd1065195789e5f09f03263d770ad0536adbcd9 Mon Sep 17 00:00:00 2001
+From: Brent DeGraaf <bdegraaf@codeaurora.org>
+Date: Fri, 26 Jul 2013 17:20:00 -0400
+Subject: [PATCH 10/14] libm: krait: Fix build warning for e_pow.o
+
+e_pow.o given more than once in the same rule. Remove extra arm/e_pow.S
+reference in libm/Android.mk.
+
+(cherry picked from commit a730ffa1195ad85a0e77afc9bf2cb78754b5985c)
+
+Change-Id: I5a4c38e838978e0538697c8a5df1e97f1175e39e
+(cherry picked from commit 1002139bee177b90dc011b8ac9f24c4696cf82b6)
+(cherry picked from commit 99146f7c6c1ee984608ad705b67f562fb9006cd0)
+---
+ libm/Android.mk |    2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/libm/Android.mk b/libm/Android.mk
+index 6359b09..b19f530 100644
+--- a/libm/Android.mk
++++ b/libm/Android.mk
+@@ -245,8 +245,6 @@ libm_common_includes := $(LOCAL_PATH)/upstream-freebsd/lib/msun/src/
+ libm_arm_includes := $(LOCAL_PATH)/arm
+ libm_arm_src_files := arm/fenv.c
+ ifeq ($(TARGET_CPU_VARIANT),krait)
+-  libm_arm_src_files += \
+-	arm/e_pow.S
+   libm_arm_cflags += -DKRAIT_NEON_OPTIMIZATION
+ endif
+ 
+-- 
+1.7.9.5
+

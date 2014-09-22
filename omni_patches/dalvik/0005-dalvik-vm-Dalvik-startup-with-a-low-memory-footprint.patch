@@ -1,0 +1,132 @@
+From 3d7c90433022c14d9cb6d84076bce07268503e46 Mon Sep 17 00:00:00 2001
+From: Vijay Dandiga <vijayd@codeaurora.org>
+Date: Tue, 15 Jan 2013 18:57:49 +0530
+Subject: [PATCH 05/10] dalvik/vm: Dalvik startup with a low memory footprint
+
+Initialize concurrentStartBytes and createMspace using HEAP_MIN_FREE.
+This helps save Android framework memory after boot.
+
+This is for low memory targets only(<=512MB RAM & hdpi resolution)
+Also, set TARGET_ARCH_LOWMEM in the BoardConfig.mk file of a device
+for this patch to take effect.
+
+Change-Id: Ia1dec6e89ef8285f1e12644bcdc6ca17a15e37a2
+---
+ vm/Android.mk           |    6 +++++
+ vm/alloc/HeapSource.cpp |   60 +++++++++++++++++++++++++++++++++--------------
+ 2 files changed, 49 insertions(+), 17 deletions(-)
+
+diff --git a/vm/Android.mk b/vm/Android.mk
+index 8cca3f3..bdd164e 100644
+--- a/vm/Android.mk
++++ b/vm/Android.mk
+@@ -56,6 +56,9 @@ include $(LOCAL_PATH)/ReconfigureDvm.mk
+ # Overwrite default settings
+ LOCAL_MODULE := libdvm
+ LOCAL_CFLAGS += $(target_smp_flag)
++ifeq ($(TARGET_ARCH_LOWMEM),true)
++  LOCAL_CFLAGS += -DDALVIK_LOWMEM
++endif
+ 
+ # Define WITH_ADDRESS_SANITIZER to build an ASan-instrumented version of the
+ # library in /system/lib/asan/libdvm.so.
+@@ -150,6 +153,9 @@ ifeq ($(WITH_HOST_DALVIK),true)
+     LOCAL_CFLAGS += $(host_inline_arg5_flag)
+     # TODO: split out the asflags.
+     LOCAL_ASFLAGS := $(LOCAL_CFLAGS)
++    ifeq ($(TARGET_ARCH_LOWMEM),true)
++      LOCAL_CFLAGS += -DDALVIK_LOWMEM
++    endif
+     LOCAL_MODULE_TAGS := optional
+     LOCAL_MODULE := libdvm
+ 
+diff --git a/vm/alloc/HeapSource.cpp b/vm/alloc/HeapSource.cpp
+index 8f1c4cb..caf30af 100644
+--- a/vm/alloc/HeapSource.cpp
++++ b/vm/alloc/HeapSource.cpp
+@@ -35,7 +35,17 @@ static void setIdealFootprint(size_t max);
+ static size_t getMaximumSize(const HeapSource *hs);
+ static void trimHeaps();
+ 
++#ifdef DALVIK_LOWMEM
++static const bool lowmem = true;
++#else
++static const bool lowmem = false;
++#endif
++
+ #define HEAP_UTILIZATION_MAX        1024
++#define DEFAULT_HEAP_UTILIZATION    512     // Range 1..HEAP_UTILIZATION_MAX
++#define HEAP_IDEAL_FREE_DEFAULT     (2 * 1024 * 1024)
++static unsigned int heapIdeaFree = HEAP_IDEAL_FREE_DEFAULT;
++#define HEAP_MIN_FREE               ((heapIdeaFree) / 4)
+ 
+ /* How long to wait after a GC before performing a heap trim
+  * operation to reclaim unused pages.
+@@ -450,16 +460,30 @@ static bool addNewHeap(HeapSource *hs)
+                   overhead, hs->maximumSize);
+         return false;
+     }
+-    size_t morecoreStart = MAX(SYSTEM_PAGE_SIZE, gDvm.heapStartingSize);
+-    heap.maximumSize = hs->growthLimit - overhead;
+-    heap.concurrentStartBytes = hs->minFree - concurrentStart;
+-    heap.base = base;
+-    heap.limit = heap.base + heap.maximumSize;
+-    heap.brk = heap.base + morecoreStart;
+-    if (!remapNewHeap(hs, &heap)) {
+-      return false;
++
++    if(lowmem) {
++        heap.maximumSize = hs->growthLimit - overhead;
++        heap.concurrentStartBytes = HEAP_MIN_FREE - concurrentStart;
++        heap.base = base;
++        heap.limit = heap.base + heap.maximumSize;
++        heap.brk = heap.base + HEAP_MIN_FREE;
++        if (!remapNewHeap(hs, &heap)) {
++          return false;
++        }
++        heap.msp = createMspace(base, HEAP_MIN_FREE, hs->maximumSize - overhead);
++    }
++    else {
++        size_t morecoreStart = MAX(SYSTEM_PAGE_SIZE, gDvm.heapStartingSize);
++        heap.maximumSize = hs->growthLimit - overhead;
++        heap.concurrentStartBytes = hs->minFree - concurrentStart;
++        heap.base = base;
++        heap.limit = heap.base + heap.maximumSize;
++        heap.brk = heap.base + morecoreStart;
++        if (!remapNewHeap(hs, &heap)) {
++          return false;
++        }
++        heap.msp = createMspace(base, morecoreStart, hs->minFree);
+     }
+-    heap.msp = createMspace(base, morecoreStart, hs->minFree);
+     if (heap.msp == NULL) {
+         return false;
+     }
+@@ -698,14 +722,16 @@ fail:
+ 
+ bool dvmHeapSourceStartupAfterZygote()
+ {
+-    //For each new application forked, we need to reset softLimit and
+-    //concurrentStartBytes to be the correct expected value, not the one
+-    //inherit from Zygote
+-    HeapSource* hs   = gHs;
+-
+-    hs->softLimit=SIZE_MAX;
+-    hs->heaps[0].concurrentStartBytes = mspace_footprint(hs->heaps[0].msp) - concurrentStart;
+-    return gDvm.concurrentMarkSweep ? gcDaemonStartup() : true;
++    if(lowmem) {
++        return gDvm.concurrentMarkSweep ? gcDaemonStartup() : true;
++    }
++    else {
++        HeapSource* hs    = gHs;
++
++        hs->softLimit=SIZE_MAX;
++        hs->heaps[0].concurrentStartBytes = mspace_footprint(hs->heaps[0].msp) - concurrentStart;
++        return gDvm.concurrentMarkSweep ? gcDaemonStartup() : true;
++    }
+ }
+ 
+ /*
+-- 
+1.7.9.5
+

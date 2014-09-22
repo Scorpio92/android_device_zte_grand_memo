@@ -1,0 +1,149 @@
+From 025640ceb93b2342021792c039aa3a73246da436 Mon Sep 17 00:00:00 2001
+From: Lucas Crowthers <lucasc@codeaurora.org>
+Date: Mon, 22 Apr 2013 16:18:18 -0400
+Subject: [PATCH 06/14] libm: sqrt and sqrtf via ARM vsqrt instruction
+
+Optimized sqrt and sqrtf for arm by using hardware
+opcode for sqrt rather than generic slow portable
+code.
+
+Change-Id: I84694159577aef6418710548085d8149c45e0e3f
+(cherry picked from commit 434d98cd36cdd2514a7118e69624e5d205ca849a)
+(cherry picked from commit 5fe41e6f146bcadd4904da26351c646cdc90d196)
+(cherry picked from commit e314f75340c8e818b17373314ceb54039fcd76ad)
+---
+ libm/Android.mk    |   12 +++++++-----
+ libm/arm/e_sqrt.S  |   36 ++++++++++++++++++++++++++++++++++++
+ libm/arm/e_sqrtf.S |   36 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 79 insertions(+), 5 deletions(-)
+ create mode 100644 libm/arm/e_sqrt.S
+ create mode 100644 libm/arm/e_sqrtf.S
+
+diff --git a/libm/Android.mk b/libm/Android.mk
+index 193436c..c6fa6b7 100644
+--- a/libm/Android.mk
++++ b/libm/Android.mk
+@@ -62,8 +62,6 @@ libm_common_src_files += \
+     upstream-freebsd/lib/msun/src/e_scalbf.c \
+     upstream-freebsd/lib/msun/src/e_sinh.c \
+     upstream-freebsd/lib/msun/src/e_sinhf.c \
+-    upstream-freebsd/lib/msun/src/e_sqrt.c \
+-    upstream-freebsd/lib/msun/src/e_sqrtf.c \
+     upstream-freebsd/lib/msun/src/k_cos.c \
+     upstream-freebsd/lib/msun/src/k_cosf.c \
+     upstream-freebsd/lib/msun/src/k_exp.c \
+@@ -173,7 +171,7 @@ libm_common_src_files += \
+     upstream-freebsd/lib/msun/src/w_cabs.c \
+     upstream-freebsd/lib/msun/src/w_cabsf.c \
+     upstream-freebsd/lib/msun/src/w_drem.c \
+-    upstream-freebsd/lib/msun/src/w_dremf.c \
++    upstream-freebsd/lib/msun/src/w_dremf.c
+ 
+ libm_common_src_files += fake_long_double.c
+ 
+@@ -181,12 +179,16 @@ libm_common_src_files += fake_long_double.c
+     libm_common_src_files += \
+ 	  arm/e_pow.S	\
+ 	  arm/s_cos.S	\
+-	  arm/s_sin.S
++	  arm/s_sin.S	\
++	  arm/e_sqrtf.S	\
++	  arm/e_sqrt.S
+     libm_common_cflags += -DKRAIT_NEON_OPTIMIZATION -fno-if-conversion
+   else
+     libm_common_src_files += \
+ 	  upstream-freebsd/lib/msun/src/s_cos.c \
+-	  upstream-freebsd/lib/msun/src/s_sin.c
++	  upstream-freebsd/lib/msun/src/s_sin.c \
++	  upstream-freebsd/lib/msun/src/e_sqrtf.c \
++	  upstream-freebsd/lib/msun/src/e_sqrt.c
+   endif
+ 
+ # TODO: on Android, "long double" is "double".
+diff --git a/libm/arm/e_sqrt.S b/libm/arm/e_sqrt.S
+new file mode 100644
+index 0000000..28dc647
+--- /dev/null
++++ b/libm/arm/e_sqrt.S
+@@ -0,0 +1,36 @@
++@ Copyright (c) 2013, The Linux Foundation. All rights reserved.
++@
++@ Redistribution and use in source and binary forms, with or without
++@ modification, are permitted provided that the following conditions are
++@ met:
++@     * Redistributions of source code must retain the above copyright
++@       notice, this list of conditions and the following disclaimer.
++@     * Redistributions in binary form must reproduce the above
++@       copyright notice, this list of conditions and the following
++@       disclaimer in the documentation and/or other materials provided
++@       with the distribution.
++@     * Neither the name of The Linux Foundation nor the names of its
++@       contributors may be used to endorse or promote products derived
++@       from this software without specific prior written permission.
++@
++@ THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
++@ WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
++@ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
++@ ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
++@ BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++@ CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++@ SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
++@ BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++@ WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
++@ OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
++@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++#include <machine/cpu-features.h>
++#include <machine/asm.h>
++
++ENTRY(sqrt)
++    vmov.f64    d0, r0, r1
++    vsqrt.f64   d0, d0
++    vmov.f64    r0, r1, d0
++    bx          lr
++END(sqrt)
+diff --git a/libm/arm/e_sqrtf.S b/libm/arm/e_sqrtf.S
+new file mode 100644
+index 0000000..4f2e4a0
+--- /dev/null
++++ b/libm/arm/e_sqrtf.S
+@@ -0,0 +1,36 @@
++@ Copyright (c) 2013, The Linux Foundation. All rights reserved.
++@
++@ Redistribution and use in source and binary forms, with or without
++@ modification, are permitted provided that the following conditions are
++@ met:
++@     * Redistributions of source code must retain the above copyright
++@       notice, this list of conditions and the following disclaimer.
++@     * Redistributions in binary form must reproduce the above
++@       copyright notice, this list of conditions and the following
++@       disclaimer in the documentation and/or other materials provided
++@       with the distribution.
++@     * Neither the name of The Linux Foundation nor the names of its
++@       contributors may be used to endorse or promote products derived
++@       from this software without specific prior written permission.
++@
++@ THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
++@ WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
++@ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
++@ ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
++@ BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++@ CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++@ SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
++@ BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
++@ WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
++@ OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
++@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++#include <machine/cpu-features.h>
++#include <machine/asm.h>
++
++ENTRY(sqrtf)
++    vmov.f32    s0, r0
++    vsqrt.f32   s0, s0
++    vmov.f32    r0, s0
++    bx          lr
++END(sqrtf)
+-- 
+1.7.9.5
+

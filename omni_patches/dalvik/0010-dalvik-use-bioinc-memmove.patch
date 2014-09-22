@@ -1,0 +1,51 @@
+From 9ccd46fc7183e6c49be0519fa1d2ac27cf500d5d Mon Sep 17 00:00:00 2001
+From: Wei Wang <wangw@codeaurora.org>
+Date: Thu, 18 Jul 2013 10:42:52 -0700
+Subject: [PATCH 10/10] dalvik: use bioinc memmove
+
+use memmove from bioinc if it is halfword atomic.
+
+Change-Id: I81c38c2b504483b69b0b1c1e4ffb63cb81d347d5
+---
+ vm/Dvm.mk                      |    1 +
+ vm/native/java_lang_System.cpp |    5 +++++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/vm/Dvm.mk b/vm/Dvm.mk
+index b79f4e6..d12cb62 100644
+--- a/vm/Dvm.mk
++++ b/vm/Dvm.mk
+@@ -267,6 +267,7 @@ ifeq ($(dvm_arch),arm)
+   ifeq ($(BOARD_USES_QCOM_HARDWARE),true)
+     LOCAL_WHOLE_STATIC_LIBRARIES += libqc-dalvik
+     LOCAL_SHARED_LIBRARIES += libqc-opt
++    LOCAL_CFLAGS += -DHAVE_HALFWORD_ATOMIC_MEMMOVE
+   endif
+ endif
+ 
+diff --git a/vm/native/java_lang_System.cpp b/vm/native/java_lang_System.cpp
+index 1b07f85..4485a92 100644
+--- a/vm/native/java_lang_System.cpp
++++ b/vm/native/java_lang_System.cpp
+@@ -62,6 +62,10 @@
+  * TODO: use __builtin_prefetch
+  * TODO: write an ARM-optimized version
+  */
++#if defined(HAVE_HALFWORD_ATOMIC_MEMMOVE)
++#define move16 memmove
++#define move32 memmove
++#else
+ static void memmove_words(void* dest, const void* src, size_t n) {
+     assert((((uintptr_t) dest | (uintptr_t) src | n) & 0x01) == 0);
+ 
+@@ -177,6 +181,7 @@ static void memmove_words(void* dest, const void* src, size_t n) {
+ 
+ #define move16 memmove_words
+ #define move32 memmove_words
++#endif
+ 
+ /*
+  * public static void arraycopy(Object src, int srcPos, Object dest,
+-- 
+1.7.9.5
+
