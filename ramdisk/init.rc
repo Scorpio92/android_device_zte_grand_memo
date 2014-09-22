@@ -41,7 +41,7 @@ sysclktz 0
 loglevel 3
 
 #[ECID:000000] ZTEBSP yuanjinxing, 20120510 add use one partition as inner sdcard, start
-    export EXTERNAL_STORAGE2 /storage/sdcard2
+#    export EXTERNAL_STORAGE2 /storage/sdcard2
 #[ECID:000000] ZTEBSP yuanjinxing, 20120510 add use one partition as inner sdcard, end
 
 # Backward compatibility
@@ -53,7 +53,7 @@ loglevel 3
     symlink /system/vendor /vendor
 
 #[ECID:000000] ZTEBSP yuanjinxing, 20120510 add use one partition as inner sdcard, start
-    mkdir /storage/sdcard2 0000 system system
+#    mkdir /storage/sdcard2 0000 system system
 #[ECID:000000] ZTEBSP yuanjinxing, 20120510 add use one partition as inner sdcard, end    
 
 # Create cgroup mount point for cpu accounting
@@ -62,7 +62,7 @@ loglevel 3
     mkdir /acct/uid
 
     # [ECID:000000] ZTEBSP yuanjinxing, 20120713 use GROW as inner sdcard, start */
-    symlink /storage/sdcard2 /sdcard2
+    #symlink /storage/sdcard2 /sdcard2
     # [ECID:000000] ZTEBSP yuanjinxing, 20120713 use GROW as inner sdcard, end */
 
 # Create cgroup mount point for memory
@@ -633,23 +633,23 @@ service dumpstate /system/bin/dumpstate -s
 
 # [ECID:000000] ZTEBSP zhoufan 20121009 start, for adding cdrom,adb
 
- service usbcfgd /system/bin/usbcfgd
-    class main
-    user root
-    group root
-    disabled
+# service usbcfgd /system/bin/usbcfgd
+#    class main
+#    user root
+#    group root
+#    disabled
     
-on property:persist.sys.usb.config=cdrom,adb
-    start usbcfgd
+#on property:persist.sys.usb.config=cdrom,adb
+#    start usbcfgd
         
 #on property:persist.sys.usb.cdrom.enable=true
 #    setprop persist.sys.usb.config cdrom  
 
-on property:persist.sys.usb.cdrom.enable=true  
-    start usbcfgd
+#on property:persist.sys.usb.cdrom.enable=true  
+#    start usbcfgd
 
-on property:persist.sys.usb.cdrom.enable=false
-   stop usbcfgd
+#on property:persist.sys.usb.cdrom.enable=false
+#   stop usbcfgd
 # [ECID:000000] ZTEBSP zhoufan 20121009 end, for adding cdrom,adb
 
 service sshd /system/bin/start-ssh
