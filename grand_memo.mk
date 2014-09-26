@@ -32,4 +32,4 @@ PRODUCT_BRAND := zte
 PRODUCT_MODEL := grand_memo
 PRODUCT_MANUFACTURER := zte
 
-#$(call inherit-product-if-exists, vendor/zte/grand_memo/grand_memo.mk)
+$(call inherit-product, device/zte/grand_memo/vendor.mk)
