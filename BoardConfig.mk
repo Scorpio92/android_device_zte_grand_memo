@@ -146,3 +146,6 @@ BOARD_SEPOLICY_UNION := \
 
 #Vold
 TARGET_USE_CUSTOM_LUN_FILE_PATH := "/sys/devices/platform/msm_hsusb/gadget/lun%d/file"
+
+#RIL
+#BOARD_RIL_CLASS := ../../../device/zte/grand_memo/ril/
