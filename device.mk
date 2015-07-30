@@ -12,7 +12,11 @@ LOCAL_PATH := device/zte/grand_memo
 #kernel
 $(shell mkdir -p $(OUT)/obj/KERNEL_OBJ/usr)
 PRODUCT_COPY_FILES += \
-    $(LOCAL_PATH)/proprietary/zImage:kernel
+    $(LOCAL_PATH)/zImage:kernel
+
+#ramdisk
+PRODUCT_COPY_FILES += \
+$(call find-copy-subdir-files,*,device/zte/grand_memo/ramdisk,root)
 
 # Configurations
 PRODUCT_COPY_FILES += \
@@ -53,12 +57,12 @@ PRODUCT_PACKAGES += recovery.fstab
 PRODUCT_PACKAGES += \
     alsa.msm8960 \
     audio.a2dp.default \
-    audio_policy.msm8960 \
-    audio.primary.msm8960 \
     audio.r_submix.default \
     audio.usb.default \
     libaudio-resampler \
     libemoji
+#    audio_policy.msm8960 \
+#    audio.primary.msm8960 \
 
 #dalvik
 PRODUCT_TAGS += dalvik.gc.type-precise
@@ -143,48 +147,6 @@ PRODUCT_PACKAGES += \
 # Other apps
 PRODUCT_PACKAGES += \
     OmniTorch
-
-# qcom
-PRODUCT_PROPERTY_OVERRIDES += \
-    ro.qc.sdk.audio.ssr=false \
-    ro.qc.sdk.audio.fluencetype=fluence \
-    ro.qc.sdk.sensors.gestures=false
-
-# Audio Configuration
-PRODUCT_PROPERTY_OVERRIDES += \
-    persist.audio.handset.mic=digital \
-    persist.audio.fluence.mode=endfire \
-    persist.audio.lowlatency.rec=false \
-    mpq.audio.decode=true \
-    media.aac_51_output_enabled=true \
-    persist.audio.vr.enable=false
-
-# common build.props
-PRODUCT_PROPERTY_OVERRIDES += \
-    persist.sys.usb.config=mtp,adb
-
-PRODUCT_PROPERTY_OVERRIDES += \
-    persist.radio.apm_sim_not_pwdn=1 \
-    ro.telephony.call_ring.multiple=0 \
-    rild.libpath=/system/lib/libril-qc-qmi-1.so \
-    wifi.interface=wlan0 \
-    wifi.supplicant_scan_interval=15
-
-PRODUCT_PROPERTY_OVERRIDES += \
-    ro.opengles.version=131072 \
-    ro.sf.lcd_density=320
-
-PRODUCT_PROPERTY_OVERRIDES += \
-    ro.product.locale.language=ru \
-    ro.product.locale.region=RU \
-    persist.sys.timezone=Russia/Khabarovsk
-
-# selinux
-PRODUCT_PROPERTY_OVERRIDES += \
-    ro.build.selinux=1
-
-PRODUCT_DEFAULT_PROPERTY_OVERRIDES += \
-    persist.service.adb.enable=1
 
 PRODUCT_BUILD_PROP_OVERRIDES += BUILD_UTC_DATE=0
 
