@@ -1,0 +1,224 @@
+on early-init
+    start ueventd
+
+# ZTE_MODIFY 2012/05/08 for FTM mode
+# create mountpoints
+    mkdir /mnt 0775 root system
+    mkdir /firmware 0771 system system
+# ZTE_MODIFY
+
+on init
+# ZTE_MODIFY 2012/05/08 for FTM mode
+#    export PATH /sbin
+    export PATH /sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
+# ZTE_MODIFY end
+    export ANDROID_ROOT /system
+    export ANDROID_DATA /data
+#    export EXTERNAL_STORAGE /sdcard
+    export EXTERNAL_STORAGE /mnt/sdcard
+
+    symlink /system/etc /etc
+
+#    mkdir /sdcard
+    mkdir /system
+    mkdir /cache
+# ZTE_MODIFY 2012/05/08 for FTM mode
+    mkdir /persist
+    mount /tmp /tmp tmpfs
+
+# ZTE_MODIFY 2012/05/08 for FTM mode
+# create mountpoints
+    mkdir /mnt 0775 root system
+    mkdir /mnt/sdcard 0000 system system
+    
+# Backwards Compat - XXX: Going away in G*
+    symlink /mnt/sdcard /sdcard
+
+    wait /dev/block/mmcblk0p12
+    mount ext4 /dev/block/mmcblk0p12 /system rw barrier=1
+
+# Allow everybody to read the xt_qtaguid resource tracking misc dev.
+# This is needed by any process that uses socket tagging.
+    chmod 0644 /dev/xt_qtaguid
+
+
+on fs
+    wait /dev/block/platform/msm_sdcc.1/by-name/persist
+    mount ext4 /dev/block/platform/msm_sdcc.1/by-name/persist /persist nosuid nodev barrier=1
+    
+    wait /dev/block/platform/msm_sdcc.1/by-name/modem
+    mount vfat /dev/block/platform/msm_sdcc.1/by-name/modem /firmware ro shortname=lower dmask=177 fmask=177
+
+on emmc-fs
+    wait /dev/block/mmcblk0p15
+    exec /system/bin/sh -c "/system/bin/ext4check.sh  mmcblk0p15 CACHE"    
+    mount ext4 /dev/block/mmcblk0p15 /data nosuid nodev barrier=1
+    mount ext4 /dev/block/mmcblk0p14 /persist nosuid nodev barrier=1
+
+on post-fs
+    mkdir /data/local 0771 shell shell
+    mkdir /data/local/tmp 0771 shell shell
+# ZTE_MODIFY end
+
+    chown root shell /tmp
+    chmod 0775 /tmp
+
+    write /sys/class/android_usb/android0/enable 0
+    write /sys/class/android_usb/android0/idVendor 19D2
+    write /sys/class/android_usb/android0/idProduct 0423
+    write /sys/class/android_usb/android0/f_diag/clients diag,diag_mdm
+    write /sys/class/android_usb/android0/functions diag,adb
+    write /sys/class/android_usb/android0/iManufacturer ${ro.product.manufacturer}
+    write /sys/class/android_usb/android0/iProduct ${ro.product.model}
+    write /sys/class/android_usb/android0/iSerial ${ro.serialno}
+    setprop sys.usb.state $sys.usb.config
+    start qcom-post-fs
+
+on boot
+
+    #Create QMUX deamon socket area
+    mkdir /dev/socket/qmux_radio 0770 root root
+    chmod 2770 /dev/socket/qmux_radio
+    mkdir /dev/socket/qmux_audio 0770 root root
+    chmod 2770 /dev/socket/qmux_audio
+    mkdir /dev/socket/qmux_bluetooth 0770 root root
+    chmod 2770 /dev/socket/qmux_bluetooth
+    mkdir /dev/socket/qmux_gps 0770 root root
+    chmod 2770 /dev/socket/qmux_gps
+
+    # Allow QMUX daemon to assign port open wait time
+    chown radio radio /sys/devices/virtual/hsicctl/hsicctl0/modem_wait
+
+
+    ifup lo
+    hostname localhost
+    domainname localdomain
+
+    class_start default
+# ZTE_MODIFY 2012/05/08 for FTM mode
+    class_start main
+    class_start core
+# ZTE_MODIFY end
+    
+service ueventd /sbin/ueventd
+    critical
+
+service recovery /sbin/recovery
+
+#[ECID:000000] ZTEBSP liwen modify for for FTM mode 20120514 start  
+service ftm_main /sbin/ftm_main
+
+# ZTE_MODIFY 2012/05/08 for FTM mode
+service console /system/bin/sh
+    class core
+    console
+    disabled
+    user shell
+    group log
+# ZTE_MODIFY end
+
+service adbd /sbin/adbd recovery
+    disabled
+
+# Always start adbd on userdebug and eng builds
+on property:ro.debuggable=1
+    write /sys/class/android_usb/android0/enable 1
+    start adbd
+	
+on property:ro.debuggable=0
+    write /sys/class/android_usb/android0/enable 1
+    start adbd
+	
+# Restart adbd so it can run as root
+on property:service.adb.root=1
+    write /sys/class/android_usb/android0/enable 0
+    restart adbd
+    write /sys/class/android_usb/android0/enable 1
+
+service qmuxd /system/bin/qmuxd
+    class main
+    user root
+
+# ZTE_MODIFY 2012/05/08 for FTM mode
+
+service rmt_storage /system/bin/rmt_storage /dev/block/mmcblk0p10 /dev/block/mmcblk0p11
+    user root
+    disabled
+    
+service vold /system/bin/vold
+    class core
+    socket vold stream 0660 root mount
+    ioprio be 2
+
+service ril-daemon /system/bin/rild
+    class main
+    socket rild stream 660 root radio
+    socket rild-debug stream 660 radio system
+    user root
+    group radio cache inet misc audio sdcard_rw qcom_oncrpc diag
+    
+service diag_klog /system/bin/diag_klog
+    class main
+    user root
+    group radio cache inet misc audio
+
+on property:ro.boot.emmc=true
+    start rmt_storage
+
+service qcom-post-fs /system/bin/sh /system/etc/init.qcom.post_fs.sh
+    user root
+    disabled
+    oneshot
+
+service qcom-sh /system/bin/sh /init.qcom.sh
+    user root
+    oneshot
+
+service qcom-post-boot /system/bin/sh /system/etc/init.qcom.post_boot.sh
+    user root
+    disabled
+    oneshot
+service getlog /system/bin/sh /system/etc/getlogtofile.sh
+    oneshot
+    disabled
+    
+service logcat_system /system/bin/logcat -v time -r 1024 -n 6 -b system -f /data/local/logs/logcat/logcat_system.log
+    class logservice
+    oneshot
+
+service logcat_main /system/bin/logcat -v time -r 1024 -n 6 -b main -f /data/local/logs/logcat/logcat_main.log
+    class logservice
+    oneshot
+
+service logcat_radio /system/bin/logcat -v time -r 1024 -n 6 -b radio -f /data/local/logs/logcat/logcat_radio.log 
+    class logservice
+    oneshot
+
+service logcat_events /system/bin/logcat -v time -r 1024 -n 6 -b events -f /data/local/logs/logcat/logcat_events.log
+    class logservice
+    oneshot
+
+#ZTEBSP yuanjinxing, start MDM
+service kickstart /system/bin/qcks -i /firmware/image/
+    oneshot
+    disabled
+
+on property:persist.sys.ztelog.enable=1
+    start getlog
+    
+on property:persist.sys.ztelog.enable=0
+    stop getlog
+    setprop log.ztelog.filelog 0
+    
+on property:log.ztelog.filelog=1
+    class_start logservice
+    
+on property:log.ztelog.filelog=0
+    class_stop logservice    
+
+#ZTEBSP yuanjinxing, start MDM
+on property:ro.baseband=mdm
+    mkdir /data/qcks 0770 system system
+    start kickstart
+
+# ZTE_MODIFY end

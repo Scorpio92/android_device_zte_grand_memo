@@ -8,7 +8,7 @@
 #     * Redistributions in binary form must reproduce the above copyright
 #       notice, this list of conditions and the following disclaimer in the
 #       documentation and/or other materials provided with the distribution.
-#     * Neither the name of The Linux Foundation nor
+#     * Neither the name of Code Aurora nor
 #       the names of its contributors may be used to endorse or promote
 #       products derived from this software without specific prior written
 #       permission.
@@ -40,16 +40,14 @@ start_sensors()
 
     mkdir -p /data/misc/sensors
     chmod 775 /data/misc/sensors
-    mkdir -p /data/app
-    chmod 771 /data/app
 
     if [ ! -s /data/system/sensors/settings ]; then
         # If the settings file is empty, enable sensors HAL
         # Otherwise leave the file with it's current contents
 #ZTEBSP fanjiankang for non-dsps sensors +++
-	   echo 1 > /data/system/sensors/settings
+#        echo 1 > /data/system/sensors/settings
     fi
-    start sensors
+#    start sensors
 #ZTEBSP fanjiankang for non-dsps sensors ---
 }
 
@@ -95,14 +93,12 @@ case "$target" in
         start quipc_main
 esac
 
-#zhenghaifeng 20130305
-#case "$target" in
-#        "msm8960")
-#        start location_mq
-#        start xtwifi_inet
-#        start xtwifi_client
-#esac
-#zhenghaifeng end
+case "$target" in
+        "msm8960")
+        start location_mq
+        start xtwifi_inet
+        start xtwifi_client
+esac
 
 case "$target" in
     "msm7630_surf" | "msm7630_1x" | "msm7630_fusion")
